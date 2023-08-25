@@ -17,6 +17,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"net/smtp"
 	"os"
@@ -84,24 +85,38 @@ func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body str
 }
 
 func main() {
-	// Define possible locations for the config file
-	configLocations := []string{"./config.ini", "/etc/resticara/config.ini",
-		filepath.Join(os.Getenv("HOME"), ".config/resticara/config.ini")}
+	customConfig := flag.String("config", "", "Path to custom config.ini file")
+	flag.Parse()
 
-	var foundConfig string
-	for _, loc := range configLocations {
-		if _, err := os.Stat(loc); err == nil {
-			foundConfig = loc
-			break
+	args := flag.Args()
+	if len(args) == 0 || args[0] != "run" {
+		fmt.Println("Usage of resticara:")
+		fmt.Println("  --config=  : Specify a custom config.ini file path")
+		fmt.Println("  run        : Run the backup")
+		return
+	}
+
+	var configPath string
+	if *customConfig != "" {
+		configPath = *customConfig
+	} else {
+		configLocations := []string{"./config.ini", "/etc/resticara/config.ini",
+			filepath.Join(os.Getenv("HOME"), ".config/resticara/config.ini")}
+		for _, loc := range configLocations {
+			if _, err := os.Stat(loc); err == nil {
+				configPath = loc
+				break
+			}
 		}
 	}
 
-	if foundConfig == "" {
+	// If config file is not found
+	if configPath == "" {
 		fmt.Println("Error: config.ini not found in any of the expected locations")
 		return
 	}
 
-	from, username, pass, to, smtpServer, smtpPort, commands, err := readConfig(foundConfig)
+	from, username, pass, to, smtpServer, smtpPort, commands, err := readConfig(configPath)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
