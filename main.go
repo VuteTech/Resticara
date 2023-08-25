@@ -19,6 +19,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"log"
+	"log/syslog"
 	"net/smtp"
 	"os"
 	"os/exec"
@@ -45,13 +47,23 @@ type MailData struct {
 	StatusMessage string
 }
 
+const (
+	Reset  = "\033[0m"
+	Red    = "\033[31m"
+	Green  = "\033[32m"
+	Yellow = "\033[33m"
+	Blue   = "\033[34m"
+	Bold   = "\033[1m"
+)
+
 func readConfig(file string) (string, string, string, string,
-	string, string, string, map[string]map[string]string, error) {
+	string, string, string, bool, map[string]map[string]string, error) {
 	cfg, err := ini.Load(file)
 	if err != nil {
-		return "", "", "", "", "", "", "", nil, err
+		return "", "", "", "", "", "", "", false, nil, err
 	}
 
+	smtpEnabled := cfg.Section("smtp").Key("enabled").MustBool(true)
 	from := cfg.Section("smtp").Key("from").String()
 	username := cfg.Section("smtp").Key("username").String()
 	pass := cfg.Section("smtp").Key("pass").String()
@@ -81,7 +93,7 @@ func readConfig(file string) (string, string, string, string,
 		commands[commandType+":"+commandName] = commandSettings
 	}
 
-	return from, username, pass, to, smtpServer, smtpPort, hostID, commands, nil
+	return from, username, pass, to, smtpServer, smtpPort, hostID, smtpEnabled, commands, nil
 }
 
 func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body string) {
@@ -115,7 +127,47 @@ func searchForFile(customPath string, defaultLocations []string) string {
 	return ""
 }
 
+func printSummary(mailData MailData, logwriter *syslog.Writer) {
+
+	// Log to syslog
+	logwriter.Notice(fmt.Sprintf("Host ID: %s", mailData.HostID))
+	logwriter.Notice(fmt.Sprintf("Date: %s", mailData.Date))
+	logwriter.Notice(fmt.Sprintf("Status: %s", mailData.StatusMessage))
+
+	for _, cmdInfo := range mailData.Commands {
+		logwriter.Notice(fmt.Sprintf("Command Key: %s", cmdInfo.CommandKey))
+		logwriter.Notice(fmt.Sprintf("Backup Command: %s", cmdInfo.BackupCmd))
+		logwriter.Notice(fmt.Sprintf("Backup Output: %s", strings.TrimSpace(cmdInfo.BackupOutput)))
+		logwriter.Notice(fmt.Sprintf("Forget Command: %s", cmdInfo.ForgetCmd))
+		logwriter.Notice(fmt.Sprintf("Forget Output: %s", strings.TrimSpace(cmdInfo.ForgetOutput)))
+	}
+
+	fmt.Println(Bold + "Backup Summary:" + Reset)
+	fmt.Println("---------------")
+	fmt.Printf(Bold+"Host ID:"+Reset+" %s\n", mailData.HostID)
+	fmt.Printf(Bold+"Date:"+Reset+" %s\n", mailData.Date)
+	if mailData.StatusMessage == "Backup successful" {
+		fmt.Printf(Bold+"Status:"+Reset+" %s%s%s\n", Green, mailData.StatusMessage, Reset)
+	} else {
+		fmt.Printf(Bold+"Status:"+Reset+" %s%s%s\n", Red, mailData.StatusMessage, Reset)
+	}
+	for _, cmdInfo := range mailData.Commands {
+		fmt.Printf(Bold+"Command Key:"+Reset+" %s\n", cmdInfo.CommandKey)
+		fmt.Printf("  "+Bold+"Backup Command:"+Reset+" %s\n", cmdInfo.BackupCmd)
+		fmt.Printf("  "+Bold+"Backup Output:"+Reset+" %s\n", strings.TrimSpace(cmdInfo.BackupOutput))
+		fmt.Printf("  "+Bold+"Forget Command:"+Reset+" %s\n", cmdInfo.ForgetCmd)
+		fmt.Printf("  "+Bold+"Forget Output:"+Reset+" %s\n", strings.TrimSpace(cmdInfo.ForgetOutput))
+	}
+	fmt.Println("---------------")
+}
+
 func main() {
+
+	logwriter, err := syslog.New(syslog.LOG_NOTICE, "resticara")
+	if err != nil {
+		log.Fatal("Failed to initialize syslog writer:", err)
+	}
+
 	customConfig := flag.String("config", "", "Path to custom config.ini file")
 	customTemplate := flag.String("mail_template", "", "Path to custom mail template file")
 	flag.Parse()
@@ -149,7 +201,7 @@ func main() {
 		return
 	}
 
-	from, username, pass, to, smtpServer, smtpPort, hostID, commands, err := readConfig(configPath)
+	from, username, pass, to, smtpServer, smtpPort, hostID, smtpEnabled, commands, err := readConfig(configPath)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
@@ -241,9 +293,18 @@ func main() {
 		return
 	}
 
-	// Convert the bytes.Buffer to a string
-	mailMessage := mailMessageBuffer.String()
-	mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
+	// Print summary to stfout
+	printSummary(mailData, logwriter)
 
-	sendEmail(from, username, pass, to, smtpServer, smtpPort, mailSubject, mailMessage)
+	if smtpEnabled {
+		// Convert the bytes.Buffer to a string
+		mailMessage := mailMessageBuffer.String()
+		mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
+
+		sendEmail(from, username, pass, to, smtpServer, smtpPort, mailSubject, mailMessage)
+	} else {
+		fmt.Println("SMTP is disabled, not sending email.")
+	}
+
+	defer logwriter.Close()
 }
