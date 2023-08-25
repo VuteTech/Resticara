@@ -1,0 +1,17 @@
+----------Backup Report----------
+Date: {{.Date}}
+
+{{range .Commands}}
+Executing command: {{.CommandKey}}
+
+$ {{.BackupCmd}}
+{{.BackupOutput}}
+
+$ {{.ForgetCmd}}
+{{.ForgetOutput}}
+{{end}}
+
+----------------------------------------
+{{.StatusMessage}}
+----------------------------------------
+
