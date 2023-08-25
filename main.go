@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -105,6 +106,18 @@ func readConfig(file string) (Config, error) {
 		}
 
 		config.Commands[commandType+":"+commandName] = commandSettings
+	}
+
+	for commandKey, settings := range config.Commands {
+		if _, err := strconv.Atoi(settings["retention_daily"]); err != nil {
+			return Config{}, fmt.Errorf("'retention_daily' for %s must be an integer", commandKey)
+		}
+		if _, err := strconv.Atoi(settings["retention_weekly"]); err != nil {
+			return Config{}, fmt.Errorf("'retention_weekly' for %s must be an integer", commandKey)
+		}
+		if _, err := strconv.Atoi(settings["retention_monthly"]); err != nil {
+			return Config{}, fmt.Errorf("'retention_monthly' for %s must be an integer", commandKey)
+		}
 	}
 
 	return config, nil
