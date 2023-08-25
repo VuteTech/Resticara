@@ -47,6 +47,18 @@ type MailData struct {
 	StatusMessage string
 }
 
+type Config struct {
+	From        string
+	Username    string
+	Pass        string
+	To          string
+	SMTPServer  string
+	SMTPPort    string
+	HostID      string
+	SMTPEnabled bool
+	Commands    map[string]map[string]string
+}
+
 const (
 	Reset  = "\033[0m"
 	Red    = "\033[31m"
@@ -56,23 +68,25 @@ const (
 	Bold   = "\033[1m"
 )
 
-func readConfig(file string) (string, string, string, string,
-	string, string, string, bool, map[string]map[string]string, error) {
+func readConfig(file string) (Config, error) {
+	var config Config
+
 	cfg, err := ini.Load(file)
 	if err != nil {
-		return "", "", "", "", "", "", "", false, nil, err
+		return Config{}, err
 	}
 
-	smtpEnabled := cfg.Section("smtp").Key("enabled").MustBool(true)
-	from := cfg.Section("smtp").Key("from").String()
-	username := cfg.Section("smtp").Key("username").String()
-	pass := cfg.Section("smtp").Key("pass").String()
-	to := cfg.Section("smtp").Key("to").String()
-	smtpServer := cfg.Section("smtp").Key("server").String()
-	smtpPort := cfg.Section("smtp").Key("port").String()
-	hostID := cfg.Section("general").Key("hostID").String()
+	config.SMTPEnabled = cfg.Section("smtp").Key("enabled").MustBool(true)
+	config.From = cfg.Section("smtp").Key("from").String()
+	config.Username = cfg.Section("smtp").Key("username").String()
+	config.Pass = cfg.Section("smtp").Key("pass").String()
+	config.To = cfg.Section("smtp").Key("to").String()
+	config.SMTPServer = cfg.Section("smtp").Key("server").String()
+	config.SMTPPort = cfg.Section("smtp").Key("port").String()
+	config.HostID = cfg.Section("general").Key("hostID").String()
 
-	commands := make(map[string]map[string]string)
+	config.Commands = make(map[string]map[string]string)
+
 	for _, section := range cfg.Sections() {
 		if section.Name() == "smtp" {
 			continue
@@ -80,20 +94,20 @@ func readConfig(file string) (string, string, string, string,
 
 		splitName := strings.Split(section.Name(), ":")
 		if len(splitName) < 2 {
-			continue // Skip sections with names that don't contain ":"
+			continue
 		}
+
 		commandType := splitName[0]
 		commandName := splitName[1]
-
 		commandSettings := make(map[string]string)
 		for key, value := range section.KeysHash() {
 			commandSettings[key] = value
 		}
 
-		commands[commandType+":"+commandName] = commandSettings
+		config.Commands[commandType+":"+commandName] = commandSettings
 	}
 
-	return from, username, pass, to, smtpServer, smtpPort, hostID, smtpEnabled, commands, nil
+	return config, nil
 }
 
 func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body string) {
@@ -201,12 +215,13 @@ func main() {
 		return
 	}
 
-	from, username, pass, to, smtpServer, smtpPort, hostID, smtpEnabled, commands, err := readConfig(configPath)
+	config, err := readConfig(configPath)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
 	}
 
+	hostID := config.HostID
 	if hostID == "hostname" {
 		host, err := os.Hostname()
 		if err != nil {
@@ -223,7 +238,7 @@ func main() {
 	}
 	allSuccess := true
 
-	for commandKey, settings := range commands {
+	for commandKey, settings := range config.Commands {
 		fmt.Printf("Executing command %s\n", commandKey)
 		commandInfo := CommandInfo{CommandKey: commandKey}
 
@@ -296,12 +311,12 @@ func main() {
 	// Print summary to stfout
 	printSummary(mailData, logwriter)
 
-	if smtpEnabled {
+	if config.SMTPEnabled {
 		// Convert the bytes.Buffer to a string
 		mailMessage := mailMessageBuffer.String()
 		mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
 
-		sendEmail(from, username, pass, to, smtpServer, smtpPort, mailSubject, mailMessage)
+		sendEmail(config.From, config.Username, config.Pass, config.To, config.SMTPServer, config.SMTPPort, mailSubject, mailMessage)
 	} else {
 		fmt.Println("SMTP is disabled, not sending email.")
 	}
