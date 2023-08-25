@@ -45,6 +45,15 @@ type MailData struct {
 	StatusMessage string
 }
 
+const (
+	Reset  = "\033[0m"
+	Red    = "\033[31m"
+	Green  = "\033[32m"
+	Yellow = "\033[33m"
+	Blue   = "\033[34m"
+	Bold   = "\033[1m"
+)
+
 func readConfig(file string) (string, string, string, string,
 	string, string, string, bool, map[string]map[string]string, error) {
 	cfg, err := ini.Load(file)
@@ -117,17 +126,21 @@ func searchForFile(customPath string, defaultLocations []string) string {
 }
 
 func printSummary(mailData MailData) {
-	fmt.Println("Backup Summary:")
+	fmt.Println(Bold + "Backup Summary:" + Reset)
 	fmt.Println("---------------")
-	fmt.Printf("Host ID: %s\n", mailData.HostID)
-	fmt.Printf("Date: %s\n", mailData.Date)
-	fmt.Printf("Status: %s\n", mailData.StatusMessage)
+	fmt.Printf(Bold+"Host ID:"+Reset+" %s\n", mailData.HostID)
+	fmt.Printf(Bold+"Date:"+Reset+" %s\n", mailData.Date)
+	if mailData.StatusMessage == "Backup successful" {
+		fmt.Printf(Bold+"Status:"+Reset+" %s%s%s\n", Green, mailData.StatusMessage, Reset)
+	} else {
+		fmt.Printf(Bold+"Status:"+Reset+" %s%s%s\n", Red, mailData.StatusMessage, Reset)
+	}
 	for _, cmdInfo := range mailData.Commands {
-		fmt.Printf("Command Key: %s\n", cmdInfo.CommandKey)
-		fmt.Printf("  Backup Command: %s\n", cmdInfo.BackupCmd)
-		fmt.Printf("  Backup Output: %s\n", strings.TrimSpace(cmdInfo.BackupOutput))
-		fmt.Printf("  Forget Command: %s\n", cmdInfo.ForgetCmd)
-		fmt.Printf("  Forget Output: %s\n", strings.TrimSpace(cmdInfo.ForgetOutput))
+		fmt.Printf(Bold+"Command Key:"+Reset+" %s\n", cmdInfo.CommandKey)
+		fmt.Printf("  "+Bold+"Backup Command:"+Reset+" %s\n", cmdInfo.BackupCmd)
+		fmt.Printf("  "+Bold+"Backup Output:"+Reset+" %s\n", strings.TrimSpace(cmdInfo.BackupOutput))
+		fmt.Printf("  "+Bold+"Forget Command:"+Reset+" %s\n", cmdInfo.ForgetCmd)
+		fmt.Printf("  "+Bold+"Forget Output:"+Reset+" %s\n", strings.TrimSpace(cmdInfo.ForgetOutput))
 	}
 	fmt.Println("---------------")
 }
