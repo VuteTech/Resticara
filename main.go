@@ -19,6 +19,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"log"
+	"log/syslog"
 	"net/smtp"
 	"os"
 	"os/exec"
@@ -125,7 +127,21 @@ func searchForFile(customPath string, defaultLocations []string) string {
 	return ""
 }
 
-func printSummary(mailData MailData) {
+func printSummary(mailData MailData, logwriter *syslog.Writer) {
+
+	// Log to syslog
+	logwriter.Notice(fmt.Sprintf("Host ID: %s", mailData.HostID))
+	logwriter.Notice(fmt.Sprintf("Date: %s", mailData.Date))
+	logwriter.Notice(fmt.Sprintf("Status: %s", mailData.StatusMessage))
+
+	for _, cmdInfo := range mailData.Commands {
+		logwriter.Notice(fmt.Sprintf("Command Key: %s", cmdInfo.CommandKey))
+		logwriter.Notice(fmt.Sprintf("Backup Command: %s", cmdInfo.BackupCmd))
+		logwriter.Notice(fmt.Sprintf("Backup Output: %s", strings.TrimSpace(cmdInfo.BackupOutput)))
+		logwriter.Notice(fmt.Sprintf("Forget Command: %s", cmdInfo.ForgetCmd))
+		logwriter.Notice(fmt.Sprintf("Forget Output: %s", strings.TrimSpace(cmdInfo.ForgetOutput)))
+	}
+
 	fmt.Println(Bold + "Backup Summary:" + Reset)
 	fmt.Println("---------------")
 	fmt.Printf(Bold+"Host ID:"+Reset+" %s\n", mailData.HostID)
@@ -146,6 +162,12 @@ func printSummary(mailData MailData) {
 }
 
 func main() {
+
+	logwriter, err := syslog.New(syslog.LOG_NOTICE, "resticara")
+	if err != nil {
+		log.Fatal("Failed to initialize syslog writer:", err)
+	}
+
 	customConfig := flag.String("config", "", "Path to custom config.ini file")
 	customTemplate := flag.String("mail_template", "", "Path to custom mail template file")
 	flag.Parse()
@@ -272,7 +294,7 @@ func main() {
 	}
 
 	// Print summary to stfout
-	printSummary(mailData)
+	printSummary(mailData, logwriter)
 
 	if smtpEnabled {
 		// Convert the bytes.Buffer to a string
@@ -283,4 +305,6 @@ func main() {
 	} else {
 		fmt.Println("SMTP is disabled, not sending email.")
 	}
+
+	defer logwriter.Close()
 }
