@@ -39,15 +39,17 @@ type CommandInfo struct {
 }
 
 type MailData struct {
+	HostID        string
 	Date          string
 	Commands      []CommandInfo
 	StatusMessage string
 }
 
-func readConfig(file string) (string, string, string, string, string, string, map[string]map[string]string, error) {
+func readConfig(file string) (string, string, string, string,
+	string, string, string, map[string]map[string]string, error) {
 	cfg, err := ini.Load(file)
 	if err != nil {
-		return "", "", "", "", "", "", nil, err
+		return "", "", "", "", "", "", "", nil, err
 	}
 
 	from := cfg.Section("smtp").Key("from").String()
@@ -56,6 +58,7 @@ func readConfig(file string) (string, string, string, string, string, string, ma
 	to := cfg.Section("smtp").Key("to").String()
 	smtpServer := cfg.Section("smtp").Key("server").String()
 	smtpPort := cfg.Section("smtp").Key("port").String()
+	hostID := cfg.Section("general").Key("hostID").String()
 
 	commands := make(map[string]map[string]string)
 	for _, section := range cfg.Sections() {
@@ -78,7 +81,7 @@ func readConfig(file string) (string, string, string, string, string, string, ma
 		commands[commandType+":"+commandName] = commandSettings
 	}
 
-	return from, username, pass, to, smtpServer, smtpPort, commands, nil
+	return from, username, pass, to, smtpServer, smtpPort, hostID, commands, nil
 }
 
 func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body string) {
@@ -146,14 +149,25 @@ func main() {
 		return
 	}
 
-	from, username, pass, to, smtpServer, smtpPort, commands, err := readConfig(configPath)
+	from, username, pass, to, smtpServer, smtpPort, hostID, commands, err := readConfig(configPath)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
 	}
 
+	if hostID == "hostname" {
+		host, err := os.Hostname()
+		if err != nil {
+			fmt.Println("Could not determine hostname, using 'Unknown'")
+			hostID = "Unknown"
+		} else {
+			hostID = host
+		}
+	}
+
 	mailData := MailData{
-		Date: time.Now().Format(time.RFC1123),
+		HostID: hostID,
+		Date:   time.Now().Format(time.RFC1123),
 	}
 	allSuccess := true
 

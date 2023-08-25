@@ -1,3 +1,7 @@
+[general]
+; if hostID=hostname, the actual hostname of the machine will be shown
+hostID=hostname
+
 [smtp]
 from = "user@example.com"
 username = "user@example.com"
