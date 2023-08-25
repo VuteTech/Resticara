@@ -46,12 +46,13 @@ type MailData struct {
 }
 
 func readConfig(file string) (string, string, string, string,
-	string, string, string, map[string]map[string]string, error) {
+	string, string, string, bool, map[string]map[string]string, error) {
 	cfg, err := ini.Load(file)
 	if err != nil {
-		return "", "", "", "", "", "", "", nil, err
+		return "", "", "", "", "", "", "", false, nil, err
 	}
 
+	smtpEnabled := cfg.Section("smtp").Key("enabled").MustBool(true)
 	from := cfg.Section("smtp").Key("from").String()
 	username := cfg.Section("smtp").Key("username").String()
 	pass := cfg.Section("smtp").Key("pass").String()
@@ -81,7 +82,7 @@ func readConfig(file string) (string, string, string, string,
 		commands[commandType+":"+commandName] = commandSettings
 	}
 
-	return from, username, pass, to, smtpServer, smtpPort, hostID, commands, nil
+	return from, username, pass, to, smtpServer, smtpPort, hostID, smtpEnabled, commands, nil
 }
 
 func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body string) {
@@ -149,7 +150,7 @@ func main() {
 		return
 	}
 
-	from, username, pass, to, smtpServer, smtpPort, hostID, commands, err := readConfig(configPath)
+	from, username, pass, to, smtpServer, smtpPort, hostID, smtpEnabled, commands, err := readConfig(configPath)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
@@ -241,9 +242,13 @@ func main() {
 		return
 	}
 
-	// Convert the bytes.Buffer to a string
-	mailMessage := mailMessageBuffer.String()
-	mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
+	if smtpEnabled {
+		// Convert the bytes.Buffer to a string
+		mailMessage := mailMessageBuffer.String()
+		mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
 
-	sendEmail(from, username, pass, to, smtpServer, smtpPort, mailSubject, mailMessage)
+		sendEmail(from, username, pass, to, smtpServer, smtpPort, mailSubject, mailMessage)
+	} else {
+		fmt.Println("SMTP is disabled, not sending email.")
+	}
 }

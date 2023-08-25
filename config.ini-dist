@@ -3,6 +3,7 @@
 hostID=hostname
 
 [smtp]
+enabled = false
 from = "user@example.com"
 username = "user@example.com"
 pass = "#################3"
