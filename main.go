@@ -116,6 +116,22 @@ func searchForFile(customPath string, defaultLocations []string) string {
 	return ""
 }
 
+func printSummary(mailData MailData) {
+	fmt.Println("Backup Summary:")
+	fmt.Println("---------------")
+	fmt.Printf("Host ID: %s\n", mailData.HostID)
+	fmt.Printf("Date: %s\n", mailData.Date)
+	fmt.Printf("Status: %s\n", mailData.StatusMessage)
+	for _, cmdInfo := range mailData.Commands {
+		fmt.Printf("Command Key: %s\n", cmdInfo.CommandKey)
+		fmt.Printf("  Backup Command: %s\n", cmdInfo.BackupCmd)
+		fmt.Printf("  Backup Output: %s\n", strings.TrimSpace(cmdInfo.BackupOutput))
+		fmt.Printf("  Forget Command: %s\n", cmdInfo.ForgetCmd)
+		fmt.Printf("  Forget Output: %s\n", strings.TrimSpace(cmdInfo.ForgetOutput))
+	}
+	fmt.Println("---------------")
+}
+
 func main() {
 	customConfig := flag.String("config", "", "Path to custom config.ini file")
 	customTemplate := flag.String("mail_template", "", "Path to custom mail template file")
@@ -241,6 +257,9 @@ func main() {
 		fmt.Println("Error executing template:", err)
 		return
 	}
+
+	// Print summary to stfout
+	printSummary(mailData)
 
 	if smtpEnabled {
 		// Convert the bytes.Buffer to a string
