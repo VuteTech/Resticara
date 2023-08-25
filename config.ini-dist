@@ -1,0 +1,21 @@
+[smtp]
+from = "user@example.com"
+username = "user@example.com"
+pass = "#################3"
+to = "admin@example.com"
+server = "mail.example.com"
+port = "587"
+
+[dir:website]
+bucket = b2:bucket:wpsites/
+directory = /var/www
+retention_daily = 4
+retention_weekly = 7
+retention_monthly = 3
+
+[mysql:maindb]
+bucket = b2:bucket:mariadb/
+database = --all-databases
+retention_daily = 4
+retention_weekly = 7
+retention_monthly = 3
