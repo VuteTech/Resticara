@@ -99,34 +99,50 @@ func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body str
 	fmt.Println("Email sent!")
 }
 
+func searchForFile(customPath string, defaultLocations []string) string {
+	if customPath != "" {
+		return customPath
+	}
+
+	for _, loc := range defaultLocations {
+		if _, err := os.Stat(loc); err == nil {
+			return loc
+		}
+	}
+	return ""
+}
+
 func main() {
 	customConfig := flag.String("config", "", "Path to custom config.ini file")
+	customTemplate := flag.String("mail_template", "", "Path to custom mail template file")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) == 0 || args[0] != "run" {
 		fmt.Println("Usage of resticara:")
 		fmt.Println("  --config=  : Specify a custom config.ini file path")
+		fmt.Println("  --mail_template= : Specify a custom mail template file path")
 		fmt.Println("  run        : Run the backup")
 		return
 	}
 
-	var configPath string
-	if *customConfig != "" {
-		configPath = *customConfig
-	} else {
-		configLocations := []string{"./config.ini", "/etc/resticara/config.ini",
-			filepath.Join(os.Getenv("HOME"), ".config/resticara/config.ini")}
-		for _, loc := range configLocations {
-			if _, err := os.Stat(loc); err == nil {
-				configPath = loc
-				break
-			}
-		}
-	}
-
+	configPath := searchForFile(*customConfig, []string{
+		"./config.ini",
+		"/etc/resticara/config.ini",
+		filepath.Join(os.Getenv("HOME"), ".config/resticara/config.ini"),
+	})
 	if configPath == "" {
 		fmt.Println("Error: config.ini not found in any of the expected locations")
+		return
+	}
+
+	templatePath := searchForFile(*customTemplate, []string{
+		"./templates/mail_template.txt",
+		"/etc/resticara/templates/mail_template.txt",
+		filepath.Join(os.Getenv("HOME"), ".config/resticara/mail_template.txt"),
+	})
+	if templatePath == "" {
+		fmt.Println("Error: mail_template.txt not found in any of the expected locations")
 		return
 	}
 
@@ -197,7 +213,7 @@ func main() {
 	}
 
 	// Open and parse the template file
-	tmpl, err := template.ParseFiles("./templates/mail_template.txt")
+	tmpl, err := template.ParseFiles(templatePath)
 	if err != nil {
 		fmt.Println("Error parsing template:", err)
 		return
