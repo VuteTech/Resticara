@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"net/smtp"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -67,7 +69,24 @@ func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body str
 }
 
 func main() {
-	from, username, pass, to, smtpServer, smtpPort, commands, err := readConfig("config.ini")
+	// Define possible locations for the config file
+	configLocations := []string{"./config.ini", "/etc/resticara/config.ini",
+		filepath.Join(os.Getenv("HOME"), ".config/resticara/config.ini")}
+
+	var foundConfig string
+	for _, loc := range configLocations {
+		if _, err := os.Stat(loc); err == nil {
+			foundConfig = loc
+			break
+		}
+	}
+
+	if foundConfig == "" {
+		fmt.Println("Error: config.ini not found in any of the expected locations")
+		return
+	}
+
+	from, username, pass, to, smtpServer, smtpPort, commands, err := readConfig(foundConfig)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
