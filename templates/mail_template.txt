@@ -1,4 +1,4 @@
-----------Backup Report----------
+----------Backup Report For {{.HostID}}----------
 Date: {{.Date}}
 
 {{range .Commands}}
