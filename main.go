@@ -24,10 +24,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 
 	"gopkg.in/ini.v1"
 )
+
+type CommandInfo struct {
+	CommandKey   string
+	BackupCmd    string
+	BackupOutput string
+	ForgetCmd    string
+	ForgetOutput string
+}
+
+type MailData struct {
+	Date          string
+	Commands      []CommandInfo
+	StatusMessage string
+}
 
 func readConfig(file string) (string, string, string, string, string, string, map[string]map[string]string, error) {
 	cfg, err := ini.Load(file)
@@ -110,7 +125,6 @@ func main() {
 		}
 	}
 
-	// If config file is not found
 	if configPath == "" {
 		fmt.Println("Error: config.ini not found in any of the expected locations")
 		return
@@ -122,12 +136,14 @@ func main() {
 		return
 	}
 
-	mailMessage := fmt.Sprintf("----------Backup Report----------\n%s\n", time.Now().Format(time.RFC1123))
-	mailSubject := ""
+	mailData := MailData{
+		Date: time.Now().Format(time.RFC1123),
+	}
 	allSuccess := true
 
 	for commandKey, settings := range commands {
 		fmt.Printf("Executing command %s\n", commandKey)
+		commandInfo := CommandInfo{CommandKey: commandKey}
 
 		var backupCmd, forgetCmd string
 		bucket := settings["bucket"]
@@ -145,7 +161,7 @@ func main() {
 			forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
 		}
 
-		cmdSuccess := func(command string) bool {
+		cmdSuccess := func(command string) (bool, string) {
 			parts := strings.Fields(command)
 			head := parts[0]
 			parts = parts[1:]
@@ -155,26 +171,49 @@ func main() {
 			cmd.Stdout = &out
 			err := cmd.Run()
 
-			mailMessage += fmt.Sprintf("\n$ %s\n%s\n", command, out.String())
-
 			if err != nil {
 				fmt.Printf("Error during command: %v\n", err)
-				return false
 			}
-			return true
+			return err == nil, out.String()
 		}
 
-		if !cmdSuccess(backupCmd) || !cmdSuccess(forgetCmd) {
-			allSuccess = false
-		}
+		success, output := cmdSuccess(backupCmd)
+		commandInfo.BackupCmd = backupCmd
+		commandInfo.BackupOutput = output
+		allSuccess = allSuccess && success
+
+		success, output = cmdSuccess(forgetCmd)
+		commandInfo.ForgetCmd = forgetCmd
+		commandInfo.ForgetOutput = output
+		allSuccess = allSuccess && success
+
+		mailData.Commands = append(mailData.Commands, commandInfo)
 	}
 
 	if allSuccess {
-		mailSubject = fmt.Sprintf("Backup successful---%s", time.Now().Format(time.RFC1123))
+		mailData.StatusMessage = "Backup successful"
 	} else {
-		mailSubject = fmt.Sprintf("Backup FAILED---%s", time.Now().Format(time.RFC1123))
-		mailMessage += "\n----------------------------------------\nBACKUP FAILED!! See output above.\n----------------------------------------\n"
+		mailData.StatusMessage = "BACKUP FAILED! See output above."
 	}
+
+	// Open and parse the template file
+	tmpl, err := template.ParseFiles("./templates/mail_template.txt")
+	if err != nil {
+		fmt.Println("Error parsing template:", err)
+		return
+	}
+
+	// Execute the template and write the output to a bytes.Buffer
+	var mailMessageBuffer bytes.Buffer
+	err = tmpl.Execute(&mailMessageBuffer, mailData)
+	if err != nil {
+		fmt.Println("Error executing template:", err)
+		return
+	}
+
+	// Convert the bytes.Buffer to a string
+	mailMessage := mailMessageBuffer.String()
+	mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
 
 	sendEmail(from, username, pass, to, smtpServer, smtpPort, mailSubject, mailMessage)
 }
