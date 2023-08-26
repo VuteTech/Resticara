@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log"
 	"log/syslog"
-	"net/smtp"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +29,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/yourusername/resticara/emailsender"
 	"gopkg.in/ini.v1"
 )
 
@@ -121,24 +121,6 @@ func readConfig(file string) (Config, error) {
 	}
 
 	return config, nil
-}
-
-func sendEmail(from, username, pass, to, smtpServer, smtpPort, subject, body string) {
-	message := "From: " + from + "\n" +
-		"To: " + to + "\n" +
-		"Subject: " + subject + "\n\n" +
-		body
-
-	err := smtp.SendMail(smtpServer+":"+smtpPort,
-		smtp.PlainAuth("", username, pass, smtpServer),
-		from, []string{to}, []byte(message))
-
-	if err != nil {
-		fmt.Printf("Error sending email: %v\n", err)
-		return
-	}
-
-	fmt.Println("Email sent!")
 }
 
 func searchForFile(customPath string, defaultLocations []string) string {
@@ -325,11 +307,28 @@ func main() {
 	printSummary(mailData, logwriter)
 
 	if config.SMTPEnabled {
+		emailSender := emailsender.SmtpEmailSender{}
+
 		// Convert the bytes.Buffer to a string
 		mailMessage := mailMessageBuffer.String()
 		mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
 
-		sendEmail(config.From, config.Username, config.Pass, config.To, config.SMTPServer, config.SMTPPort, mailSubject, mailMessage)
+		emailConfig := emailsender.EmailConfig{
+			From:       config.From,
+			Username:   config.Username,
+			Password:   config.Pass,
+			To:         config.To,
+			SmtpServer: config.SMTPServer,
+			SmtpPort:   config.SMTPPort,
+			Subject:    mailSubject,
+			Body:       mailMessage,
+		}
+
+		if err := emailSender.Send(emailConfig); err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println("Email sent!")
+		}
 	} else {
 		fmt.Println("SMTP is disabled, not sending email.")
 	}
