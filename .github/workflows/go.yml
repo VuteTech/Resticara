@@ -14,57 +14,62 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+    - uses: actions/checkout@v3
 
     - name: Setup Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v2
       with:
         go-version: '1.20'
 
-    - name: Build Binary
-      run: go build -v -o resticara ./...
+    - name: Build
+      run: go build -v -o resticara
 
     - name: Run Tests
       run: go test -v ./...
+
+    - name: Zip artifacts
+      run: zip -r resticara-${{ github.ref_name }}.zip resticara config.ini templates/
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v2
       with:
         name: resticara-artifacts
-        path: |
-          resticara
-          config.ini
-          templates/
+        path: resticara-${{ github.ref_name }}.zip
 
-  zip:
+  package:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     steps:
-    - name: Download build artifacts
-      uses: actions/download-artifact@v2
+    - uses: actions/checkout@v2
+    - uses: actions/download-artifact@v2
       with:
         name: resticara-artifacts
+    
+    - name: Install FPM
+      run: sudo apt-get install ruby-dev rubygems build-essential && sudo gem install --no-document fpm
 
-    - name: Zip Artifacts
-      run: zip -r resticara.zip resticara config.ini templates/
+    - name: Create DEB package
+      run: fpm -s dir -t deb -n resticara -v ${{ github.ref_name }} --prefix=/usr/local/bin resticara --config-files=/etc/resticara/ config.ini templates/
 
-    - name: Upload zipped artifacts
+    - name: Create RPM package
+      run: fpm -s dir -t rpm -n resticara -v ${{ github.ref_name }} --prefix=/usr/local/bin resticara --config-files=/etc/resticara/ config.ini templates/
+
+    - name: Upload packaged artifacts
       uses: actions/upload-artifact@v2
       with:
-        name: resticara-zip
-        path: resticara.zip
+        name: packaged-artifacts
+        path: |
+          *.deb
+          *.rpm
 
   release:
-    needs: zip
+    needs: package
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-    - name: Download zip from artifacts
-      uses: actions/download-artifact@v2
+    - uses: actions/download-artifact@v2
       with:
-        name: resticara-zip
+        name: packaged-artifacts
 
     - name: Create GitHub Release
       id: create_release
@@ -75,16 +80,27 @@ jobs:
         body: Description of the release
         draft: false
         prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Upload Release Asset
-      id: upload-release-asset
+    - name: Upload Release Assets
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./resticara.zip
-        asset_name: resticara.zip
+        asset_path: ./resticara-${{ github.ref_name }}.zip
+        asset_name: resticara-${{ github.ref_name }}.zip
         asset_content_type: application/zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload DEB Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./resticara-${{ github.ref_name }}.deb
+        asset_name: resticara-${{ github.ref_name }}.deb
+        asset_content_type: application/octet-stream
+
+    - name: Upload RPM Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./resticara-${{ github.ref_name }}.rpm
+        asset_name: resticara-${{ github.ref_name }}.rpm
+        asset_content_type: application/octet-stream
