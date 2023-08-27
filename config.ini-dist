@@ -4,12 +4,12 @@ hostID=hostname
 
 [smtp]
 enabled = false
-from = "user@example.com"
-username = "user@example.com"
-pass = "#################3"
-to = "admin@example.com"
-server = "mail.example.com"
-port = "587"
+;from = "user@example.com"
+;username = "user@example.com"
+;pass = "#################3"
+;to = "admin@example.com"
+;server = "mail.example.com"
+;port = "587"
 
 [dir:website]
 bucket = b2:bucket:wpsites/
