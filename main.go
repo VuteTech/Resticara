@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"log/syslog"
 	"os"
@@ -170,8 +171,62 @@ func printSummary(mailData MailData, logwriter *syslog.Writer) {
 	fmt.Println("---------------")
 }
 
-func main() {
+func cmdSuccess(command string) (bool, string) {
+	var out bytes.Buffer
 
+	// Special case: we have a MySQL dump piped to restic
+	if strings.HasPrefix(command, "mysqldump") {
+		parts := strings.Split(command, "|")
+		mysqldumpCmdStr := strings.TrimSpace(parts[0])
+		resticCmdStr := strings.TrimSpace(parts[1])
+
+		mysqldumpParts := strings.Fields(mysqldumpCmdStr)
+		resticParts := strings.Fields(resticCmdStr)
+
+		c1 := exec.Command(mysqldumpParts[0], mysqldumpParts[1:]...)
+		c2 := exec.Command(resticParts[0], resticParts[1:]...)
+
+		pr, pw := io.Pipe()
+		c1.Stdout = pw
+		c2.Stdin = pr
+		c2.Stdout = &out
+
+		var err1, err2 error
+
+		c1.Start()
+		c2.Start()
+
+		go func() {
+			defer pw.Close()
+			err1 = c1.Wait()
+		}()
+
+		err2 = c2.Wait()
+		if err1 != nil || err2 != nil {
+			return false, out.String()
+		}
+
+		return true, out.String()
+	}
+
+	// For all other commands
+	parts := strings.Fields(command)
+	head := parts[0]
+	parts = parts[1:]
+
+	cmd := exec.Command(head, parts...)
+	cmd.Stdout = &out
+	err := cmd.Run()
+	return err == nil, out.String()
+}
+
+type DefaultCommandRunner struct{}
+
+func (runner DefaultCommandRunner) Run(cmd string) (bool, string) {
+	return cmdSuccess(cmd) // Here cmdSuccess is your existing function
+}
+
+func main() {
 	logwriter, err := syslog.New(syslog.LOG_NOTICE, "resticara")
 	if err != nil {
 		log.Fatal("Failed to initialize syslog writer:", err)
@@ -233,6 +288,8 @@ func main() {
 	}
 	allSuccess := true
 
+	commandRunner := DefaultCommandRunner{}
+
 	for commandKey, settings := range config.Commands {
 		fmt.Printf("Executing command %s\n", commandKey)
 		commandInfo := CommandInfo{CommandKey: commandKey}
@@ -249,32 +306,16 @@ func main() {
 			forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
 		} else if strings.HasPrefix(commandKey, "mysql:") {
 			database := settings["database"]
-			backupCmd = fmt.Sprintf("mysqldump %s | restic -r %s backup --stdin --stdin-filename %s.sql", database, bucket, commandKey)
+			backupCmd = fmt.Sprintf("mysqldump %s | restic -r %s backup --stdin --stdin-filename %s.sql", database, bucket, database)
 			forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
 		}
 
-		cmdSuccess := func(command string) (bool, string) {
-			parts := strings.Fields(command)
-			head := parts[0]
-			parts = parts[1:]
-
-			cmd := exec.Command(head, parts...)
-			var out bytes.Buffer
-			cmd.Stdout = &out
-			err := cmd.Run()
-
-			if err != nil {
-				fmt.Printf("Error during command: %v\n", err)
-			}
-			return err == nil, out.String()
-		}
-
-		success, output := cmdSuccess(backupCmd)
+		success, output := commandRunner.Run(backupCmd)
 		commandInfo.BackupCmd = backupCmd
 		commandInfo.BackupOutput = output
 		allSuccess = allSuccess && success
 
-		success, output = cmdSuccess(forgetCmd)
+		success, output = commandRunner.Run(forgetCmd)
 		commandInfo.ForgetCmd = forgetCmd
 		commandInfo.ForgetOutput = output
 		allSuccess = allSuccess && success
@@ -303,16 +344,12 @@ func main() {
 		return
 	}
 
-	// Print summary to stfout
 	printSummary(mailData, logwriter)
 
 	if config.SMTPEnabled {
 		emailSender := emailsender.SmtpEmailSender{}
-
-		// Convert the bytes.Buffer to a string
 		mailMessage := mailMessageBuffer.String()
 		mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
-
 		emailConfig := emailsender.EmailConfig{
 			From:       config.From,
 			Username:   config.Username,
