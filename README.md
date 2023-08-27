@@ -1,3 +1,4 @@
+![Resticara logo](https://repository-images.githubusercontent.com/683147638/770302ee-0cd8-4394-a039-7250d003a0a0)
 # Resticara
 
 ## Overview
