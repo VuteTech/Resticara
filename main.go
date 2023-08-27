@@ -171,8 +171,8 @@ func printSummary(mailData MailData, logwriter *syslog.Writer) {
 	fmt.Println("---------------")
 }
 
-func cmdSuccess(command string) (bool, string) {
-	var out bytes.Buffer
+func cmdSuccess(command string) (bool, string, string) {
+	var stdoutBuf, stderrBuf bytes.Buffer
 
 	// Special case: we have a MySQL dump piped to restic
 	if strings.HasPrefix(command, "mysqldump") {
@@ -189,7 +189,8 @@ func cmdSuccess(command string) (bool, string) {
 		pr, pw := io.Pipe()
 		c1.Stdout = pw
 		c2.Stdin = pr
-		c2.Stdout = &out
+		c2.Stdout = &stdoutBuf
+		c2.Stderr = &stderrBuf // Capture stderr as well
 
 		var err1, err2 error
 
@@ -203,10 +204,10 @@ func cmdSuccess(command string) (bool, string) {
 
 		err2 = c2.Wait()
 		if err1 != nil || err2 != nil {
-			return false, out.String()
+			return false, stdoutBuf.String(), stderrBuf.String()
 		}
 
-		return true, out.String()
+		return true, stdoutBuf.String(), stderrBuf.String()
 	}
 
 	// For all other commands
@@ -215,14 +216,16 @@ func cmdSuccess(command string) (bool, string) {
 	parts = parts[1:]
 
 	cmd := exec.Command(head, parts...)
-	cmd.Stdout = &out
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf // Capture stderr as well
 	err := cmd.Run()
-	return err == nil, out.String()
+
+	return err == nil, stdoutBuf.String(), stderrBuf.String()
 }
 
 type DefaultCommandRunner struct{}
 
-func (runner DefaultCommandRunner) Run(cmd string) (bool, string) {
+func (runner DefaultCommandRunner) Run(cmd string) (bool, string, string) {
 	return cmdSuccess(cmd) // Here cmdSuccess is your existing function
 }
 
@@ -310,14 +313,14 @@ func main() {
 			forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
 		}
 
-		success, output := commandRunner.Run(backupCmd)
+		success, stdout, stderr := commandRunner.Run(backupCmd)
 		commandInfo.BackupCmd = backupCmd
-		commandInfo.BackupOutput = output
+		commandInfo.BackupOutput = stdout + "\nStderr: " + stderr
 		allSuccess = allSuccess && success
 
-		success, output = commandRunner.Run(forgetCmd)
+		success, stdout, stderr = commandRunner.Run(forgetCmd)
 		commandInfo.ForgetCmd = forgetCmd
-		commandInfo.ForgetOutput = output
+		commandInfo.ForgetOutput = stdout + "\nStderr: " + stderr
 		allSuccess = allSuccess && success
 
 		mailData.Commands = append(mailData.Commands, commandInfo)
