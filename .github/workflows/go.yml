@@ -95,6 +95,7 @@ jobs:
         echo "mkdir -p %{buildroot}/usr/bin" >> ~/rpmbuild/SPECS/resticara.spec
         echo "mkdir -p %{buildroot}/etc/resticara/templates" >> ~/rpmbuild/SPECS/resticara.spec
         echo "cp ~/rpmbuild/SOURCES/resticara %{buildroot}/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "chmod 0755 %{buildroot}/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
         echo "cp ~/rpmbuild/SOURCES/config.ini-dist %{buildroot}/etc/resticara/config.ini" >> ~/rpmbuild/SPECS/resticara.spec
         echo "cp -r ~/rpmbuild/SOURCES/templates/* %{buildroot}/etc/resticara/templates/" >> ~/rpmbuild/SPECS/resticara.spec
         echo "" >> ~/rpmbuild/SPECS/resticara.spec
