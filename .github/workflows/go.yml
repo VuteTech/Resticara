@@ -80,6 +80,8 @@ jobs:
         fi
         mkdir -p ~/rpmbuild/SOURCES ~/rpmbuild/SPECS
         cp resticara ~/rpmbuild/SOURCES/
+        cp config.ini-dist ~/rpmbuild/SOURCES/config.ini-dist
+        cp -r templates ~/rpmbuild/SOURCES/templates
         echo "Summary: Wrapper of Restic for simplified configuration and deployment." > ~/rpmbuild/SPECS/resticara.spec
         echo "Name: resticara" >> ~/rpmbuild/SPECS/resticara.spec
         echo "Version: $VERSION" >> ~/rpmbuild/SPECS/resticara.spec
@@ -90,10 +92,16 @@ jobs:
         echo "Wrapper of Restic for simplified configuration and deployment." >> ~/rpmbuild/SPECS/resticara.spec
         echo "" >> ~/rpmbuild/SPECS/resticara.spec
         echo "%install" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "cp ~/rpmbuild/SOURCES/resticara %{buildroot}/usr/local/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "mkdir -p %{buildroot}/usr/bin" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "mkdir -p %{buildroot}/etc/resticara/templates" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "cp ~/rpmbuild/SOURCES/resticara %{buildroot}/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "cp ~/rpmbuild/SOURCES/config.ini-dist %{buildroot}/etc/resticara/config.ini" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "cp -r ~/rpmbuild/SOURCES/templates/* %{buildroot}/etc/resticara/templates/" >> ~/rpmbuild/SPECS/resticara.spec
         echo "" >> ~/rpmbuild/SPECS/resticara.spec
         echo "%files" >> ~/rpmbuild/SPECS/resticara.spec
         echo "/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "/etc/resticara/config.ini" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "/etc/resticara/templates/*" >> ~/rpmbuild/SPECS/resticara.spec
 
     - name: Build RPM package
       run: rpmbuild -ba ~/rpmbuild/SPECS/resticara.spec
@@ -145,10 +153,10 @@ jobs:
         asset_name: resticara-${{ github.ref_name }}.deb
         asset_content_type: application/octet-stream
 
-    # - name: Upload RPM Asset
-    #   uses: actions/upload-release-asset@v1
-    #   with:
-    #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-    #     asset_path: ./resticara-${{ github.ref_name }}.rpm
-    #     asset_name: resticara-${{ github.ref_name }}.rpm
-    #     asset_content_type: application/octet-stream
+    - name: Upload RPM Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./resticara-${{ github.ref_name }}.rpm
+        asset_name: resticara-${{ github.ref_name }}.rpm
+        asset_content_type: application/octet-stream
