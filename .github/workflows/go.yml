@@ -123,7 +123,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: deb-package
-        path: *.deb
+        path: '*.deb'
 
     - name: Upload RPM package artifact
       uses: actions/upload-artifact@v3
@@ -135,7 +135,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: zip-archive
-        path: *.zip
+        path: '*.zip'
 
   release:
     needs: package
