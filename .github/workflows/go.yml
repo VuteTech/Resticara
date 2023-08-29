@@ -46,23 +46,32 @@ jobs:
     - uses: actions/download-artifact@v2
       with:
         name: resticara-artifacts
-    
-    - name: Install FPM
-      run: sudo apt-get install ruby-dev rubygems build-essential && sudo gem install --no-document fpm
 
-    - name: Create DEB package
-      run: fpm -s dir -t deb -n resticara -v ${{ github.ref_name }} --prefix=/usr/local/bin resticara --config-files=/etc/resticara/ config.ini templates/
+    - name: Install dpkg-dev
+      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev
 
-    - name: Create RPM package
-      run: fpm -s dir -t rpm -n resticara -v ${{ github.ref_name }} --prefix=/usr/local/bin resticara --config-files=/etc/resticara/ config.ini templates/
+    - name: Prepare Debian Package Structure
+      run: |
+        mkdir -p debian/DEBIAN
+        mkdir -p debian/usr/local/bin
+        mkdir -p debian/etc/resticara
+        cp resticara debian/usr/local/bin/
+        cp config.ini debian/etc/resticara/
+        cp templates/* debian/etc/resticara/
+        echo "Package: resticara" > debian/DEBIAN/control
+        echo "Version: ${{ github.ref_name }}" >> debian/DEBIAN/control
+        echo "Architecture: amd64" >> debian/DEBIAN/control
+        echo "Maintainer: Blagovest Petrov <blago.petrov@vute.tech>" >> debian/DEBIAN/control
+        echo "Description: Wrapper of Restic for simplified configuration and deployment." >> debian/DEBIAN/control
+
+    - name: Build DEB package
+      run: dpkg-deb --build debian resticara-${{ github.ref_name }}.deb
 
     - name: Upload packaged artifacts
       uses: actions/upload-artifact@v2
       with:
         name: packaged-artifacts
-        path: |
-          *.deb
-          *.rpm
+        path: resticara-${{ github.ref_name }}.deb
 
   release:
     needs: package
@@ -83,13 +92,13 @@ jobs:
         draft: false
         prerelease: false
 
-    - name: Upload Release Assets
-      uses: actions/upload-release-asset@v1
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./resticara-${{ github.ref_name }}.zip
-        asset_name: resticara-${{ github.ref_name }}.zip
-        asset_content_type: application/zip
+    # - name: Upload Release Assets
+    #   uses: actions/upload-release-asset@v1
+    #   with:
+    #     upload_url: ${{ steps.create_release.outputs.upload_url }}
+    #     asset_path: ./resticara-${{ github.ref_name }}.zip
+    #     asset_name: resticara-${{ github.ref_name }}.zip
+    #     asset_content_type: application/zip
 
     - name: Upload DEB Asset
       uses: actions/upload-release-asset@v1
@@ -99,10 +108,10 @@ jobs:
         asset_name: resticara-${{ github.ref_name }}.deb
         asset_content_type: application/octet-stream
 
-    - name: Upload RPM Asset
-      uses: actions/upload-release-asset@v1
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./resticara-${{ github.ref_name }}.rpm
-        asset_name: resticara-${{ github.ref_name }}.rpm
-        asset_content_type: application/octet-stream
+    # - name: Upload RPM Asset
+    #   uses: actions/upload-release-asset@v1
+    #   with:
+    #     upload_url: ${{ steps.create_release.outputs.upload_url }}
+    #     asset_path: ./resticara-${{ github.ref_name }}.rpm
+    #     asset_name: resticara-${{ github.ref_name }}.rpm
+    #     asset_content_type: application/octet-stream
