@@ -186,7 +186,7 @@ jobs:
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./resticara-${{ github.ref_name }}.x86_64.rpm
+        asset_path: ./x86_64/resticara-${{ github.ref_name }}.x86_64.rpm
         asset_name: resticara-${{ github.ref_name }}.x86_64.rpm
         asset_content_type: application/octet-stream
 
