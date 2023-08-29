@@ -50,6 +50,11 @@ jobs:
 
     - name: Prepare Debian Package Structure
       run: |
+        if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
+          VERSION="${{ github.ref_name }}"
+        else
+          VERSION="0.0.0+${{ github.run_number }}"
+        fi
         mkdir -p debian/DEBIAN
         mkdir -p debian/usr/local/bin
         mkdir -p debian/etc/resticara
@@ -58,7 +63,6 @@ jobs:
         cp config.ini-dist debian/etc/resticara/config.ini
         cp templates/* debian/etc/resticara/
         echo "Package: resticara" > debian/DEBIAN/control
-        VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.0.0+' + github.run_number }}
         echo "Version: $VERSION" >> debian/DEBIAN/control
         echo "Architecture: amd64" >> debian/DEBIAN/control
         echo "Maintainer: Blagovest Petrov <blago.petrov@vute.tech>" >> debian/DEBIAN/control
