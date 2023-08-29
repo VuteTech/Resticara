@@ -18,7 +18,7 @@ jobs:
     - uses: actions/checkout@v3
 
     - name: Setup Go
-      uses: actions/setup-go@v2
+      uses: actions/setup-go@v5
       with:
         go-version: '1.20'
 
@@ -31,7 +31,7 @@ jobs:
       run: go test -v ./...
 
     - name: Upload binary build artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: resticara-artifacts
         path: resticara
@@ -40,7 +40,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - uses: actions/download-artifact@v2
       with:
         name: resticara-artifacts
@@ -72,7 +72,7 @@ jobs:
       run: dpkg-deb --build debian resticara-${{ github.ref_name }}.deb
 
     - name: Upload packaged artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: packaged-artifacts
         path: resticara-${{ github.ref_name }}.deb
