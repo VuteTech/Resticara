@@ -86,7 +86,7 @@ jobs:
         echo "Name: resticara" >> ~/rpmbuild/SPECS/resticara.spec
         echo "Version: $VERSION" >> ~/rpmbuild/SPECS/resticara.spec
         echo "Release: 1" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "License: MIT" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "License: GPLv3" >> ~/rpmbuild/SPECS/resticara.spec
         echo "" >> ~/rpmbuild/SPECS/resticara.spec
         echo "%description" >> ~/rpmbuild/SPECS/resticara.spec
         echo "Wrapper of Restic for simplified configuration and deployment." >> ~/rpmbuild/SPECS/resticara.spec
@@ -107,17 +107,35 @@ jobs:
     - name: Build RPM package
       run: rpmbuild -ba ~/rpmbuild/SPECS/resticara.spec
 
+    - name: Build zip file
+      run: |
+        if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
+          VERSION="${{ github.ref_name }}"
+        else
+          VERSION="0.1+${{ github.run_number }}"
+        fi
+        mkdir -p "resticara-$VERSION"
+        cp config.ini-dist "resticara-$VERSION/config.ini"
+        cp -r templates/ "resticara-$VERSION"
+        zip -r "resticara-$VERSION.zip" "resticara-$VERSION"
+
     - name: Upload DEB package artifact
       uses: actions/upload-artifact@v3
       with:
         name: deb-package
-        path: resticara-${{ github.ref_name }}.deb
+        path: *.deb
 
     - name: Upload RPM package artifact
       uses: actions/upload-artifact@v3
       with:
         name: rpm-package
         path: ~/rpmbuild/RPMS/**/*.rpm
+
+    - name: Upload ZIP archivea artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: zip-archive
+        path: *.zip
 
   release:
     needs: package
