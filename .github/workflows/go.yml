@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - ci_packages
     tags:
       - '*'
   pull_request:
