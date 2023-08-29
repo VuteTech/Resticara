@@ -46,14 +46,14 @@ jobs:
         name: resticara-artifacts
 
     - name: Install dpkg-dev
-      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev unzip
+      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev rpm
 
     - name: Prepare Debian Package Structure
       run: |
         if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
           VERSION="${{ github.ref_name }}"
         else
-          VERSION="0.0.0+${{ github.run_number }}"
+          VERSION="0.1+${{ github.run_number }}"
         fi
         mkdir -p debian/DEBIAN
         mkdir -p debian/usr/local/bin
@@ -71,11 +71,44 @@ jobs:
     - name: Build DEB package
       run: dpkg-deb --build debian resticara-${{ github.ref_name }}.deb
 
-    - name: Upload packaged artifacts
+    - name: Prepare RPM Package Structure
+      run: |
+        if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
+          VERSION="${{ github.ref_name }}"
+        else
+          VERSION="0.1+${{ github.run_number }}"
+        fi
+        mkdir -p ~/rpmbuild/SOURCES ~/rpmbuild/SPECS
+        cp resticara ~/rpmbuild/SOURCES/
+        echo "Summary: Wrapper of Restic for simplified configuration and deployment." > ~/rpmbuild/SPECS/resticara.spec
+        echo "Name: resticara" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "Version: $VERSION" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "Release: 1" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "License: MIT" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "%description" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "Wrapper of Restic for simplified configuration and deployment." >> ~/rpmbuild/SPECS/resticara.spec
+        echo "" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "%install" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "cp ~/rpmbuild/SOURCES/resticara %{buildroot}/usr/local/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "%files" >> ~/rpmbuild/SPECS/resticara.spec
+        echo "/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
+
+    - name: Build RPM package
+      run: rpmbuild -ba ~/rpmbuild/SPECS/resticara.spec
+
+    - name: Upload DEB package artifact
       uses: actions/upload-artifact@v3
       with:
-        name: packaged-artifacts
+        name: deb-package
         path: resticara-${{ github.ref_name }}.deb
+
+    - name: Upload RPM package artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: rpm=package
+        path: ~/rpmbuild/RPMS/**/*.rpm
 
   release:
     needs: package
