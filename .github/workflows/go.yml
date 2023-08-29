@@ -115,7 +115,7 @@ jobs:
     - name: Upload RPM package artifact
       uses: actions/upload-artifact@v3
       with:
-        name: rpm=package
+        name: rpm-package
         path: ~/rpmbuild/RPMS/**/*.rpm
 
   release:
