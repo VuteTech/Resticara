@@ -30,14 +30,11 @@ jobs:
     - name: Run Tests
       run: go test -v ./...
 
-    # - name: Zip artifacts
-    #   run: zip -r resticara-${{ github.ref_name }}.zip resticara config.ini templates/
-
     - name: Upload binary build artifact
       uses: actions/upload-artifact@v2
       with:
         name: resticara-artifacts
-        path: resticara-${{ github.ref_name }}
+        path: resticara
 
   package:
     needs: build
@@ -51,15 +48,12 @@ jobs:
     - name: Install dpkg-dev
       run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev unzip
 
-    - name: Unzip artifacts
-      run: unzip -p resticara-${{ github.ref_name }}.zip resticara > resticara
-
     - name: Prepare Debian Package Structure
       run: |
         mkdir -p debian/DEBIAN
         mkdir -p debian/usr/local/bin
         mkdir -p debian/etc/resticara
-        cp resticara-${{ github.ref_name }} debian/usr/local/bin/resticara
+        cp resticara debian/usr/local/bin/resticara
         chmod +x debian/usr/local/bin/resticara
         cp config.ini-dist debian/etc/resticara/config.ini
         cp templates/* debian/etc/resticara/
