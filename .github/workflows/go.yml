@@ -57,11 +57,11 @@ jobs:
         fi
         mkdir -p debian/DEBIAN
         mkdir -p debian/usr/local/bin
-        mkdir -p debian/etc/resticara
+        mkdir -p debian/etc/resticara/templates
         cp resticara debian/usr/local/bin/resticara
         chmod +x debian/usr/local/bin/resticara
         cp config.ini-dist debian/etc/resticara/config.ini
-        cp templates/* debian/etc/resticara/
+        cp templates/* debian/etc/resticara/templates
         echo "Package: resticara" > debian/DEBIAN/control
         echo "Version: $VERSION" >> debian/DEBIAN/control
         echo "Architecture: amd64" >> debian/DEBIAN/control
