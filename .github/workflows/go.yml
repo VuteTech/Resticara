@@ -52,7 +52,7 @@ jobs:
       run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev unzip
 
     - name: Unzip artifacts
-      run: unzip resticara-${{ github.ref_name }}.zip
+      run: unzip -p resticara-${{ github.ref_name }}.zip resticara > resticara
 
     - name: Prepare Debian Package Structure
       run: |
