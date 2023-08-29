@@ -49,7 +49,10 @@ jobs:
         name: resticara-artifacts
 
     - name: Install dpkg-dev
-      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev
+      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev unzip
+
+    - name: Unzip artifacts
+      run: unzip resticara-${{ github.ref_name }}.zip
 
     - name: Prepare Debian Package Structure
       run: |
