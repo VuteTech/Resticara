@@ -185,11 +185,18 @@ jobs:
     - name: DEBUG_ list RPM files
       run: ls -la && ls -la x86_64
 
+    - name: Find RPM file path
+      id: find_rpm
+      run: |
+        RPM_PATH=$(find ./x86_64/ -name "*.rpm")
+        echo "RPM_PATH=${RPM_PATH}"
+        echo "RPM_PATH=${RPM_PATH}" >> $GITHUB_ENV
+
     - name: Upload RPM Asset
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: './x86_64/*.rpm'
+        asset_path: ' ${{ env.RPM_PATH }}'
         asset_name: resticara-${{ github.ref_name }}.x86_64.rpm
         asset_content_type: application/octet-stream
 
