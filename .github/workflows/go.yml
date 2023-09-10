@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - ci_packages
     tags:
       - '*'
   pull_request:
@@ -41,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - uses: actions/download-artifact@v2
+    - uses: actions/download-artifact@v3
       with:
         name: resticara-artifacts
 
@@ -181,12 +180,19 @@ jobs:
         asset_path: ./resticara-${{ github.ref_name }}.deb
         asset_name: resticara-${{ github.ref_name }}.x86_64.deb
         asset_content_type: application/octet-stream
+    
+    - name: Find RPM file path
+      id: find_rpm
+      run: |
+        RPM_PATH=$(find ./x86_64/ -name "*.rpm")
+        echo "RPM_PATH=${RPM_PATH}"
+        echo "RPM_PATH=${RPM_PATH}" >> $GITHUB_ENV
 
     - name: Upload RPM Asset
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: './x86_64/*.rpm'
+        asset_path: ' ${{ env.RPM_PATH }}'
         asset_name: resticara-${{ github.ref_name }}.x86_64.rpm
         asset_content_type: application/octet-stream
 
@@ -194,6 +200,6 @@ jobs:
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./resticara-${{ github.ref_name }}.zo[]
+        asset_path: ./resticara-${{ github.ref_name }}.zip
         asset_name: resticara-${{ github.ref_name }}.Linux-x86_64.zip
         asset_content_type: application/octet-stream
