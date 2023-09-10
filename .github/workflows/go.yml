@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - fix_CI_rpm
     tags:
       - '*'
   pull_request:
@@ -182,9 +181,6 @@ jobs:
         asset_name: resticara-${{ github.ref_name }}.x86_64.deb
         asset_content_type: application/octet-stream
     
-    - name: DEBUG_ list RPM files
-      run: ls -la && ls -la x86_64
-
     - name: Find RPM file path
       id: find_rpm
       run: |
