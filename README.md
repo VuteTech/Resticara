@@ -20,6 +20,10 @@ The configuration is done through `config.ini` file placed in `/etc/resticara/` 
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.
 * Support for more operating systems.
+* Better syntax of the Syslog logs.
+* Automated creation of SystemD timers?
+* Integrated Prometheus exporter
+* Option of running tasks for different repositories in parallel
 
 ## Logging
 Resticara logs all its activities to syslog by default, so you can easily monitor its actions and diagnose any potential issues.
