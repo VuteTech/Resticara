@@ -4,6 +4,8 @@
 ## Overview
 Resticara is a wrapper around [Restic](https://restic.net/), designed to simplify the deployment of Restic for straightforward tasks like website, maildirs, or SQL database backups. Resticara aims to make the backup process less tedious, more streamlined, and more flexible, right out of the box.
 
+## [Blog post](https://petrovs.info/post/2023-09-11-resticara/)
+
 ## Features
 * Restic Wrapper: Utilizes the proven, fast, and secure backup program Restic.
 * Simplified Configuration: Uses config.ini for easy setup and configuration.
