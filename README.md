@@ -24,6 +24,7 @@ The configuration is done through `config.ini` file placed in `/etc/resticara/` 
 * Automated creation of SystemD timers?
 * Integrated Prometheus exporter
 * Option of running tasks for different repositories in parallel
+* A website and documentation
 
 ## Logging
 Resticara logs all its activities to syslog by default, so you can easily monitor its actions and diagnose any potential issues.
