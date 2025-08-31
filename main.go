@@ -33,6 +33,7 @@ import (
 	"gopkg.in/ini.v1"
 	"resticara/notificators/emailsender"
 	"resticara/notificators/matrixsender"
+	"resticara/notificators/telegramsender"
 )
 
 type CommandInfo struct {
@@ -51,21 +52,24 @@ type MailData struct {
 }
 
 type Config struct {
-	From           string
-	Username       string
-	Pass           string
-	To             string
-	SMTPServer     string
-	SMTPPort       string
-	HostID         string
-	RetentionPrune int
-	SMTPEnabled    bool
-	MatrixEnabled  bool
-	MatrixServer   string
-	MatrixUser     string
-	MatrixPass     string
-	MatrixRoomID   string
-	Commands       map[string]map[string]string
+	From            string
+	Username        string
+	Pass            string
+	To              string
+	SMTPServer      string
+	SMTPPort        string
+	HostID          string
+	RetentionPrune  int
+	SMTPEnabled     bool
+	MatrixEnabled   bool
+	MatrixServer    string
+	MatrixUser      string
+	MatrixPass      string
+	MatrixRoomID    string
+	TelegramEnabled bool
+	TelegramToken   string
+	TelegramChatID  int64
+	Commands        map[string]map[string]string
 }
 
 const (
@@ -99,13 +103,17 @@ func readConfig(file string) (Config, error) {
 	config.MatrixPass = cfg.Section("matrix").Key("pass").String()
 	config.MatrixRoomID = cfg.Section("matrix").Key("room_id").String()
 
+	config.TelegramEnabled = cfg.Section("telegram").Key("enabled").MustBool(false)
+	config.TelegramToken = cfg.Section("telegram").Key("bot_token").String()
+	config.TelegramChatID = cfg.Section("telegram").Key("chat_id").MustInt64(0)
+
 	config.HostID = cfg.Section("general").Key("hostID").String()
 	config.RetentionPrune = cfg.Section("general").Key("retention_prune").MustInt(30)
 
 	config.Commands = make(map[string]map[string]string)
 
 	for _, section := range cfg.Sections() {
-		if section.Name() == "smtp" || section.Name() == "matrix" {
+		if section.Name() == "smtp" || section.Name() == "matrix" || section.Name() == "telegram" {
 			continue
 		}
 
@@ -599,6 +607,24 @@ func main() {
 			}
 		} else {
 			fmt.Println("Matrix is disabled, not sending message.")
+		}
+
+		if config.TelegramEnabled {
+			telegramSender := telegramsender.BotAPISender{}
+			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
+			telegramConfig := telegramsender.TelegramConfig{
+				BotToken: config.TelegramToken,
+				ChatID:   config.TelegramChatID,
+				Message:  message,
+			}
+
+			if err := telegramSender.Send(telegramConfig); err != nil {
+				fmt.Println(err)
+			} else {
+				fmt.Println("Telegram message sent!")
+			}
+		} else {
+			fmt.Println("Telegram is disabled, not sending message.")
 		}
 	case "prune":
 		if len(args) < 2 {

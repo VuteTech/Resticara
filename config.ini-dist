@@ -19,6 +19,11 @@ enabled = false
 ;pass = "#################"
 ;room_id = "!abcdefg:example.com"
 
+[telegram]
+enabled = false
+;bot_token = "123456:ABCDEF"
+;chat_id = 123456789
+
 [dir:website]
 bucket = b2:bucket:wpsites/
 directory = /var/www

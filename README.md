@@ -12,6 +12,7 @@ Resticara is a wrapper around [Restic](https://restic.net/), designed to simplif
 * Syslog Integration: Logging to syslog is enabled by default for better traceability.
 * Email Notifications: Can be configured to send emails upon backup completion or failure.
 * Matrix Notifications: Send backup status messages to a Matrix room.
+* Telegram Notifications: Send backup status messages to a Telegram chat via bot.
 * Single Binary: Written in Go, Resticara is distributed as a single binary—making it extremely easy to deploy.
  * Systemd Timer Generation: Create and activate systemd timers with `resticara gentimer`.
 
