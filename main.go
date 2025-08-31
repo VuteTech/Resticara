@@ -30,8 +30,9 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/yourusername/resticara/emailsender"
 	"gopkg.in/ini.v1"
+	"resticara/notificators/emailsender"
+	"resticara/notificators/matrixsender"
 )
 
 type CommandInfo struct {
@@ -59,6 +60,11 @@ type Config struct {
 	HostID         string
 	RetentionPrune int
 	SMTPEnabled    bool
+	MatrixEnabled  bool
+	MatrixServer   string
+	MatrixUser     string
+	MatrixPass     string
+	MatrixRoomID   string
 	Commands       map[string]map[string]string
 }
 
@@ -86,13 +92,20 @@ func readConfig(file string) (Config, error) {
 	config.To = cfg.Section("smtp").Key("to").String()
 	config.SMTPServer = cfg.Section("smtp").Key("server").String()
 	config.SMTPPort = cfg.Section("smtp").Key("port").String()
+
+	config.MatrixEnabled = cfg.Section("matrix").Key("enabled").MustBool(false)
+	config.MatrixServer = cfg.Section("matrix").Key("server").String()
+	config.MatrixUser = cfg.Section("matrix").Key("username").String()
+	config.MatrixPass = cfg.Section("matrix").Key("pass").String()
+	config.MatrixRoomID = cfg.Section("matrix").Key("room_id").String()
+
 	config.HostID = cfg.Section("general").Key("hostID").String()
 	config.RetentionPrune = cfg.Section("general").Key("retention_prune").MustInt(30)
 
 	config.Commands = make(map[string]map[string]string)
 
 	for _, section := range cfg.Sections() {
-		if section.Name() == "smtp" {
+		if section.Name() == "smtp" || section.Name() == "matrix" {
 			continue
 		}
 
@@ -566,6 +579,26 @@ func main() {
 			}
 		} else {
 			fmt.Println("SMTP is disabled, not sending email.")
+		}
+
+		if config.MatrixEnabled {
+			matrixSender := matrixsender.GomatrixSender{}
+			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
+			matrixConfig := matrixsender.MatrixConfig{
+				Homeserver: config.MatrixServer,
+				Username:   config.MatrixUser,
+				Password:   config.MatrixPass,
+				RoomID:     config.MatrixRoomID,
+				Message:    message,
+			}
+
+			if err := matrixSender.Send(matrixConfig); err != nil {
+				fmt.Println(err)
+			} else {
+				fmt.Println("Matrix message sent!")
+			}
+		} else {
+			fmt.Println("Matrix is disabled, not sending message.")
 		}
 	case "prune":
 		if len(args) < 2 {

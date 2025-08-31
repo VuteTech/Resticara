@@ -12,6 +12,13 @@ enabled = false
 ;server = "mail.example.com"
 ;port = "587"
 
+[matrix]
+enabled = false
+;server = "https://matrix.example.com"
+;username = "@bot:example.com"
+;pass = "#################"
+;room_id = "!abcdefg:example.com"
+
 [dir:website]
 bucket = b2:bucket:wpsites/
 directory = /var/www
