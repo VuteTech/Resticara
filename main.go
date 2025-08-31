@@ -137,6 +137,14 @@ func searchForFile(customPath string, defaultLocations []string) string {
 	return ""
 }
 
+func printUsage() {
+	fmt.Println("Usage of resticara:")
+	fmt.Println("  --config=       : Specify a custom config.ini file path")
+	fmt.Println("  --mail_template=: Specify a custom mail template file path")
+	fmt.Println("  run             : Run the backup")
+	fmt.Println("  prune <all|repository> : Prune restic repositories")
+}
+
 func printSummary(mailData MailData, logwriter *syslog.Writer) {
 
 	// Log to syslog
@@ -234,17 +242,15 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize syslog writer:", err)
 	}
+	defer logwriter.Close()
 
 	customConfig := flag.String("config", "", "Path to custom config.ini file")
 	customTemplate := flag.String("mail_template", "", "Path to custom mail template file")
 	flag.Parse()
 
 	args := flag.Args()
-	if len(args) == 0 || args[0] != "run" {
-		fmt.Println("Usage of resticara:")
-		fmt.Println("  --config=  : Specify a custom config.ini file path")
-		fmt.Println("  --mail_template= : Specify a custom mail template file path")
-		fmt.Println("  run        : Run the backup")
+	if len(args) == 0 {
+		printUsage()
 		return
 	}
 
@@ -258,119 +264,163 @@ func main() {
 		return
 	}
 
-	templatePath := searchForFile(*customTemplate, []string{
-		"./templates/mail_template.txt",
-		"/etc/resticara/templates/mail_template.txt",
-		filepath.Join(os.Getenv("HOME"), ".config/resticara/mail_template.txt"),
-	})
-	if templatePath == "" {
-		fmt.Println("Error: mail_template.txt not found in any of the expected locations")
-		return
-	}
-
 	config, err := readConfig(configPath)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
 	}
 
-	hostID := config.HostID
-	if hostID == "hostname" {
-		host, err := os.Hostname()
+	switch args[0] {
+	case "run":
+		templatePath := searchForFile(*customTemplate, []string{
+			"./templates/mail_template.txt",
+			"/etc/resticara/templates/mail_template.txt",
+			filepath.Join(os.Getenv("HOME"), ".config/resticara/mail_template.txt"),
+		})
+		if templatePath == "" {
+			fmt.Println("Error: mail_template.txt not found in any of the expected locations")
+			return
+		}
+
+		hostID := config.HostID
+		if hostID == "hostname" {
+			host, err := os.Hostname()
+			if err != nil {
+				fmt.Println("Could not determine hostname, using 'Unknown'")
+				hostID = "Unknown"
+			} else {
+				hostID = host
+			}
+		}
+
+		mailData := MailData{
+			HostID: hostID,
+			Date:   time.Now().Format(time.RFC1123),
+		}
+		allSuccess := true
+
+		commandRunner := DefaultCommandRunner{}
+
+		for commandKey, settings := range config.Commands {
+			fmt.Printf("Executing command %s\n", commandKey)
+			commandInfo := CommandInfo{CommandKey: commandKey}
+
+			var backupCmd, forgetCmd string
+			bucket := settings["bucket"]
+			retentionDaily := settings["retention_daily"]
+			retentionWeekly := settings["retention_weekly"]
+			retentionMonthly := settings["retention_monthly"]
+
+			if strings.HasPrefix(commandKey, "dir:") {
+				directory := settings["directory"]
+				backupCmd = fmt.Sprintf("restic -r %s backup %s", bucket, directory)
+				forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
+			} else if strings.HasPrefix(commandKey, "mysql:") {
+				database := settings["database"]
+				backupCmd = fmt.Sprintf("mysqldump %s | restic -r %s backup --stdin --stdin-filename %s.sql", database, bucket, database)
+				forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
+			}
+
+			success, stdout, stderr := commandRunner.Run(backupCmd)
+			commandInfo.BackupCmd = backupCmd
+			commandInfo.BackupOutput = stdout + "\nStderr: " + stderr
+			allSuccess = allSuccess && success
+
+			success, stdout, stderr = commandRunner.Run(forgetCmd)
+			commandInfo.ForgetCmd = forgetCmd
+			commandInfo.ForgetOutput = stdout + "\nStderr: " + stderr
+			allSuccess = allSuccess && success
+
+			mailData.Commands = append(mailData.Commands, commandInfo)
+		}
+
+		if allSuccess {
+			mailData.StatusMessage = "Backup successful"
+		} else {
+			mailData.StatusMessage = "BACKUP FAILED! See output above."
+		}
+
+		tmpl, err := template.ParseFiles(templatePath)
 		if err != nil {
-			fmt.Println("Could not determine hostname, using 'Unknown'")
-			hostID = "Unknown"
+			fmt.Println("Error parsing template:", err)
+			return
+		}
+
+		var mailMessageBuffer bytes.Buffer
+		err = tmpl.Execute(&mailMessageBuffer, mailData)
+		if err != nil {
+			fmt.Println("Error executing template:", err)
+			return
+		}
+
+		printSummary(mailData, logwriter)
+
+		if config.SMTPEnabled {
+			emailSender := emailsender.SmtpEmailSender{}
+			mailMessage := mailMessageBuffer.String()
+			mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
+			emailConfig := emailsender.EmailConfig{
+				From:       config.From,
+				Username:   config.Username,
+				Password:   config.Pass,
+				To:         config.To,
+				SmtpServer: config.SMTPServer,
+				SmtpPort:   config.SMTPPort,
+				Subject:    mailSubject,
+				Body:       mailMessage,
+			}
+
+			if err := emailSender.Send(emailConfig); err != nil {
+				fmt.Println(err)
+			} else {
+				fmt.Println("Email sent!")
+			}
 		} else {
-			hostID = host
+			fmt.Println("SMTP is disabled, not sending email.")
 		}
-	}
-
-	mailData := MailData{
-		HostID: hostID,
-		Date:   time.Now().Format(time.RFC1123),
-	}
-	allSuccess := true
-
-	commandRunner := DefaultCommandRunner{}
-
-	for commandKey, settings := range config.Commands {
-		fmt.Printf("Executing command %s\n", commandKey)
-		commandInfo := CommandInfo{CommandKey: commandKey}
-
-		var backupCmd, forgetCmd string
-		bucket := settings["bucket"]
-		retentionDaily := settings["retention_daily"]
-		retentionWeekly := settings["retention_weekly"]
-		retentionMonthly := settings["retention_monthly"]
-
-		if strings.HasPrefix(commandKey, "dir:") {
-			directory := settings["directory"]
-			backupCmd = fmt.Sprintf("restic -r %s backup %s", bucket, directory)
-			forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
-		} else if strings.HasPrefix(commandKey, "mysql:") {
-			database := settings["database"]
-			backupCmd = fmt.Sprintf("mysqldump %s | restic -r %s backup --stdin --stdin-filename %s.sql", database, bucket, database)
-			forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
+	case "prune":
+		if len(args) < 2 {
+			fmt.Println("Usage: resticara prune <all|repository>")
+			return
+		}
+		repoArg := args[1]
+		uniqueBuckets := make(map[string]bool)
+		for _, settings := range config.Commands {
+			bucket := settings["bucket"]
+			uniqueBuckets[bucket] = true
 		}
 
-		success, stdout, stderr := commandRunner.Run(backupCmd)
-		commandInfo.BackupCmd = backupCmd
-		commandInfo.BackupOutput = stdout + "\nStderr: " + stderr
-		allSuccess = allSuccess && success
+		commandRunner := DefaultCommandRunner{}
 
-		success, stdout, stderr = commandRunner.Run(forgetCmd)
-		commandInfo.ForgetCmd = forgetCmd
-		commandInfo.ForgetOutput = stdout + "\nStderr: " + stderr
-		allSuccess = allSuccess && success
-
-		mailData.Commands = append(mailData.Commands, commandInfo)
-	}
-
-	if allSuccess {
-		mailData.StatusMessage = "Backup successful"
-	} else {
-		mailData.StatusMessage = "BACKUP FAILED! See output above."
-	}
-
-	// Open and parse the template file
-	tmpl, err := template.ParseFiles(templatePath)
-	if err != nil {
-		fmt.Println("Error parsing template:", err)
-		return
-	}
-
-	// Execute the template and write the output to a bytes.Buffer
-	var mailMessageBuffer bytes.Buffer
-	err = tmpl.Execute(&mailMessageBuffer, mailData)
-	if err != nil {
-		fmt.Println("Error executing template:", err)
-		return
-	}
-
-	printSummary(mailData, logwriter)
-
-	if config.SMTPEnabled {
-		emailSender := emailsender.SmtpEmailSender{}
-		mailMessage := mailMessageBuffer.String()
-		mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
-		emailConfig := emailsender.EmailConfig{
-			From:       config.From,
-			Username:   config.Username,
-			Password:   config.Pass,
-			To:         config.To,
-			SmtpServer: config.SMTPServer,
-			SmtpPort:   config.SMTPPort,
-			Subject:    mailSubject,
-			Body:       mailMessage,
-		}
-
-		if err := emailSender.Send(emailConfig); err != nil {
-			fmt.Println(err)
+		if repoArg == "all" {
+			for bucket := range uniqueBuckets {
+				fmt.Printf("Pruning repository %s\n", bucket)
+				success, stdout, stderr := commandRunner.Run(fmt.Sprintf("restic -r %s prune", bucket))
+				fmt.Print(stdout)
+				if stderr != "" {
+					fmt.Printf("Stderr: %s\n", stderr)
+				}
+				if !success {
+					fmt.Printf("Prune failed for %s\n", bucket)
+				}
+			}
 		} else {
-			fmt.Println("Email sent!")
+			if !uniqueBuckets[repoArg] {
+				fmt.Printf("Repository %s not found in config\n", repoArg)
+				return
+			}
+			fmt.Printf("Pruning repository %s\n", repoArg)
+			success, stdout, stderr := commandRunner.Run(fmt.Sprintf("restic -r %s prune", repoArg))
+			fmt.Print(stdout)
+			if stderr != "" {
+				fmt.Printf("Stderr: %s\n", stderr)
+			}
+			if !success {
+				fmt.Printf("Prune failed for %s\n", repoArg)
+			}
 		}
-	} else {
-		fmt.Println("SMTP is disabled, not sending email.")
+	default:
+		printUsage()
 	}
 
 	defer logwriter.Close()
