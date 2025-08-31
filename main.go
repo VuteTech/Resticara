@@ -254,10 +254,7 @@ func generateTimers(config Config) error {
 	paths := strings.FieldsFunc(unitLine, func(r rune) bool { return r == ':' || r == ' ' })
 	unitDir := ""
 	for _, p := range paths {
-		if p == "" {
-			continue
-		}
-		if strings.Contains(p, "/etc/systemd/system") {
+		if p == "/etc/systemd/system" {
 			if _, err := os.Stat(p); err == nil {
 				unitDir = p
 				break
