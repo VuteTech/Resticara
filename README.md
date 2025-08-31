@@ -19,6 +19,14 @@ You can download the latest version of Resticara from the [Releases](https://git
 ## Configuration
 The configuration is done through `config.ini` file placed in `/etc/resticara/` . Check out the `config.ini-dist` file in the repository for an example configuration.
 
+## Pruning repositories
+Use the prune command to remove unneeded data from configured restic repositories.
+
+```
+resticara prune all                   # prune all repositories
+resticara prune b2:bucket:wpsites/    # prune a single repository
+```
+
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.
 * Support for more operating systems.
