@@ -30,7 +30,7 @@ jobs:
       run: go test -v ./...
 
     - name: Upload binary build artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: resticara-artifacts
         path: resticara
@@ -121,19 +121,19 @@ jobs:
         zip -r "resticara-$VERSION.zip" "resticara-$VERSION"
 
     - name: Upload DEB package artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: deb-package
         path: '*.deb'
 
     - name: Upload RPM package artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: rpm-package
         path: ~/rpmbuild/RPMS/**/*.rpm
 
     - name: Upload ZIP archivea artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: zip-archive
         path: '*.zip'
@@ -149,17 +149,17 @@ jobs:
 
     steps:
     - name: Download DEB package artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: deb-package
 
     - name: Download RPM package artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: rpm-package
 
     - name: Download ZIP archive artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: zip-archive
 
