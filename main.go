@@ -251,19 +251,32 @@ func generateTimers(config Config) error {
 	}
 	unitLine := strings.TrimSpace(string(unitOut))
 	unitLine = strings.TrimPrefix(unitLine, "UnitPath=")
-	paths := strings.Split(unitLine, ":")
+	paths := strings.FieldsFunc(unitLine, func(r rune) bool { return r == ':' || r == ' ' })
 	unitDir := ""
 	for _, p := range paths {
+		if p == "" {
+			continue
+		}
 		if strings.Contains(p, "/etc/systemd/system") {
-			unitDir = p
-			break
+			if _, err := os.Stat(p); err == nil {
+				unitDir = p
+				break
+			}
 		}
 	}
-	if unitDir == "" && len(paths) > 0 {
-		unitDir = paths[0]
+	if unitDir == "" {
+		for _, p := range paths {
+			if p == "" {
+				continue
+			}
+			if _, err := os.Stat(p); err == nil {
+				unitDir = p
+				break
+			}
+		}
 	}
 	if unitDir == "" {
-		return fmt.Errorf("could not determine systemd unit directory")
+		return fmt.Errorf("could not determine systemd unit directory from UnitPath: %s", unitLine)
 	}
 
 	var timers []string
