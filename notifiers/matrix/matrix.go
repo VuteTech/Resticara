@@ -1,4 +1,4 @@
-package matrixsender
+package matrix
 
 import (
 	"fmt"
@@ -14,13 +14,13 @@ type MatrixConfig struct {
 	Message    string
 }
 
-type MatrixSender interface {
+type MatrixNotifier interface {
 	Send(cfg MatrixConfig) error
 }
 
-type GomatrixSender struct{}
+type GomatrixNotifier struct{}
 
-func (s GomatrixSender) Send(cfg MatrixConfig) error {
+func (s GomatrixNotifier) Send(cfg MatrixConfig) error {
 	cli, err := gomatrix.NewClient(cfg.Homeserver, "", "")
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)

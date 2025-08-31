@@ -31,9 +31,9 @@ import (
 	"time"
 
 	"gopkg.in/ini.v1"
-	"resticara/notificators/emailsender"
-	"resticara/notificators/matrixsender"
-	"resticara/notificators/telegramsender"
+	"resticara/notifiers/email"
+	"resticara/notifiers/matrix"
+	"resticara/notifiers/telegram"
 )
 
 type CommandInfo struct {
@@ -566,10 +566,10 @@ func main() {
 		printSummary(mailData, logwriter)
 
 		if config.SMTPEnabled {
-			emailSender := emailsender.SmtpEmailSender{}
+			emailNotifier := email.SmtpEmailNotifier{}
 			mailMessage := mailMessageBuffer.String()
 			mailSubject := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123)
-			emailConfig := emailsender.EmailConfig{
+			emailConfig := email.EmailConfig{
 				From:       config.From,
 				Username:   config.Username,
 				Password:   config.Pass,
@@ -580,7 +580,7 @@ func main() {
 				Body:       mailMessage,
 			}
 
-			if err := emailSender.Send(emailConfig); err != nil {
+			if err := emailNotifier.Send(emailConfig); err != nil {
 				fmt.Println(err)
 			} else {
 				fmt.Println("Email sent!")
@@ -590,9 +590,9 @@ func main() {
 		}
 
 		if config.MatrixEnabled {
-			matrixSender := matrixsender.GomatrixSender{}
+			matrixNotifier := matrix.GomatrixNotifier{}
 			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
-			matrixConfig := matrixsender.MatrixConfig{
+			matrixConfig := matrix.MatrixConfig{
 				Homeserver: config.MatrixServer,
 				Username:   config.MatrixUser,
 				Password:   config.MatrixPass,
@@ -600,7 +600,7 @@ func main() {
 				Message:    message,
 			}
 
-			if err := matrixSender.Send(matrixConfig); err != nil {
+			if err := matrixNotifier.Send(matrixConfig); err != nil {
 				fmt.Println(err)
 			} else {
 				fmt.Println("Matrix message sent!")
@@ -610,15 +610,15 @@ func main() {
 		}
 
 		if config.TelegramEnabled {
-			telegramSender := telegramsender.BotAPISender{}
+			telegramNotifier := telegram.BotAPINotifier{}
 			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
-			telegramConfig := telegramsender.TelegramConfig{
+			telegramConfig := telegram.TelegramConfig{
 				BotToken: config.TelegramToken,
 				ChatID:   config.TelegramChatID,
 				Message:  message,
 			}
 
-			if err := telegramSender.Send(telegramConfig); err != nil {
+			if err := telegramNotifier.Send(telegramConfig); err != nil {
 				fmt.Println(err)
 			} else {
 				fmt.Println("Telegram message sent!")
