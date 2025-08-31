@@ -50,15 +50,16 @@ type MailData struct {
 }
 
 type Config struct {
-	From        string
-	Username    string
-	Pass        string
-	To          string
-	SMTPServer  string
-	SMTPPort    string
-	HostID      string
-	SMTPEnabled bool
-	Commands    map[string]map[string]string
+	From           string
+	Username       string
+	Pass           string
+	To             string
+	SMTPServer     string
+	SMTPPort       string
+	HostID         string
+	RetentionPrune int
+	SMTPEnabled    bool
+	Commands       map[string]map[string]string
 }
 
 const (
@@ -86,6 +87,7 @@ func readConfig(file string) (Config, error) {
 	config.SMTPServer = cfg.Section("smtp").Key("server").String()
 	config.SMTPPort = cfg.Section("smtp").Key("port").String()
 	config.HostID = cfg.Section("general").Key("hostID").String()
+	config.RetentionPrune = cfg.Section("general").Key("retention_prune").MustInt(30)
 
 	config.Commands = make(map[string]map[string]string)
 
@@ -119,6 +121,11 @@ func readConfig(file string) (Config, error) {
 		if _, err := strconv.Atoi(settings["retention_monthly"]); err != nil {
 			return Config{}, fmt.Errorf("'retention_monthly' for %s must be an integer", commandKey)
 		}
+		if val, ok := settings["retention_prune"]; ok {
+			if _, err := strconv.Atoi(val); err != nil {
+				return Config{}, fmt.Errorf("'retention_prune' for %s must be an integer", commandKey)
+			}
+		}
 	}
 
 	return config, nil
@@ -141,8 +148,9 @@ func printUsage() {
 	fmt.Println("Usage of resticara:")
 	fmt.Println("  --config=       : Specify a custom config.ini file path")
 	fmt.Println("  --mail_template=: Specify a custom mail template file path")
-	fmt.Println("  run             : Run the backup")
+	fmt.Println("  run [command]   : Run backups (all or specific command)")
 	fmt.Println("  prune <all|repository> : Prune restic repositories")
+	fmt.Println("  gentimer        : Generate systemd service and timer files")
 }
 
 func printSummary(mailData MailData, logwriter *syslog.Writer) {
@@ -231,6 +239,173 @@ func cmdSuccess(command string) (bool, string, string) {
 	return err == nil, stdoutBuf.String(), stderrBuf.String()
 }
 
+func sanitizeName(name string) string {
+	replacer := strings.NewReplacer(":", "-", "/", "-", " ", "-")
+	return replacer.Replace(name)
+}
+
+func generateTimers(config Config) error {
+	unitOut, err := exec.Command("systemctl", "show", "--property=UnitPath").Output()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve systemd unit path: %v", err)
+	}
+	unitLine := strings.TrimSpace(string(unitOut))
+	unitLine = strings.TrimPrefix(unitLine, "UnitPath=")
+	paths := strings.FieldsFunc(unitLine, func(r rune) bool { return r == ':' || r == ' ' })
+	unitDir := ""
+	for _, p := range paths {
+		if p == "/etc/systemd/system" {
+			if _, err := os.Stat(p); err == nil {
+				unitDir = p
+				break
+			}
+		}
+	}
+	if unitDir == "" {
+		for _, p := range paths {
+			if p == "" {
+				continue
+			}
+			if _, err := os.Stat(p); err == nil {
+				unitDir = p
+				break
+			}
+		}
+	}
+	if unitDir == "" {
+		return fmt.Errorf("could not determine systemd unit directory from UnitPath: %s", unitLine)
+	}
+
+	type timerUnit struct {
+		commandKey string
+		sanitized  string
+		bucket     string
+		pruneDays  int
+	}
+	var units []timerUnit
+	expected := make(map[string]struct{})
+	for commandKey, settings := range config.Commands {
+		sanitized := sanitizeName(commandKey)
+		pruneDays := config.RetentionPrune
+		if val, ok := settings["retention_prune"]; ok {
+			if d, err := strconv.Atoi(val); err == nil {
+				pruneDays = d
+			}
+		}
+		bucket := settings["bucket"]
+		units = append(units, timerUnit{
+			commandKey: commandKey,
+			sanitized:  sanitized,
+			bucket:     bucket,
+			pruneDays:  pruneDays,
+		})
+		expected["resticara-"+sanitized] = struct{}{}
+		expected["resticara-"+sanitized+"-prune"] = struct{}{}
+	}
+
+	entries, err := os.ReadDir(unitDir)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]struct{})
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "resticara-") {
+			continue
+		}
+		if !(strings.HasSuffix(name, ".service") || strings.HasSuffix(name, ".timer")) {
+			continue
+		}
+		base := strings.TrimSuffix(strings.TrimSuffix(name, ".service"), ".timer")
+		existing[base] = struct{}{}
+	}
+	for base := range existing {
+		if _, ok := expected[base]; !ok {
+			exec.Command("systemctl", "disable", "--now", base+".timer").Run()
+			exec.Command("systemctl", "disable", "--now", base+".service").Run()
+			os.Remove(filepath.Join(unitDir, base+".timer"))
+			os.Remove(filepath.Join(unitDir, base+".service"))
+		}
+	}
+
+	var timers []string
+	for _, u := range units {
+		backupService := fmt.Sprintf(`[Unit]
+Description=Resticara backup for %s
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/resticara run %s
+
+[Install]
+WantedBy=multi-user.target
+`, u.commandKey, u.commandKey)
+
+		backupTimer := fmt.Sprintf(`[Unit]
+Description=Resticara backup timer for %s
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`, u.commandKey)
+
+		pruneService := fmt.Sprintf(`[Unit]
+Description=Resticara prune for %s
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/resticara prune %s
+
+[Install]
+WantedBy=multi-user.target
+`, u.commandKey, u.bucket)
+
+		pruneTimer := fmt.Sprintf(`[Unit]
+Description=Resticara prune timer for %s
+
+[Timer]
+OnUnitActiveSec=%dd
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`, u.commandKey, u.pruneDays)
+
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.service", u.sanitized)), []byte(backupService), 0644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.timer", u.sanitized)), []byte(backupTimer), 0644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.service", u.sanitized)), []byte(pruneService), 0644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.timer", u.sanitized)), []byte(pruneTimer), 0644); err != nil {
+			return err
+		}
+		timers = append(timers, fmt.Sprintf("resticara-%s.timer", u.sanitized))
+		timers = append(timers, fmt.Sprintf("resticara-%s-prune.timer", u.sanitized))
+	}
+
+	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+		return fmt.Errorf("failed to reload systemd daemon: %v", err)
+	}
+	for _, t := range timers {
+		if err := exec.Command("systemctl", "enable", t).Run(); err != nil {
+			return fmt.Errorf("failed to enable %s: %v", t, err)
+		}
+		if err := exec.Command("systemctl", "restart", t).Run(); err != nil {
+			return fmt.Errorf("failed to restart %s: %v", t, err)
+		}
+	}
+
+	fmt.Printf("Systemd timer files written to %s and activated.\n", unitDir)
+	return nil
+}
+
 type DefaultCommandRunner struct{}
 
 func (runner DefaultCommandRunner) Run(cmd string) (bool, string, string) {
@@ -301,7 +476,21 @@ func main() {
 
 		commandRunner := DefaultCommandRunner{}
 
-		for commandKey, settings := range config.Commands {
+		var commandKeys []string
+		if len(args) > 1 {
+			if _, ok := config.Commands[args[1]]; !ok {
+				fmt.Printf("Command %s not found in config\n", args[1])
+				return
+			}
+			commandKeys = []string{args[1]}
+		} else {
+			for k := range config.Commands {
+				commandKeys = append(commandKeys, k)
+			}
+		}
+
+		for _, commandKey := range commandKeys {
+			settings := config.Commands[commandKey]
 			fmt.Printf("Executing command %s\n", commandKey)
 			commandInfo := CommandInfo{CommandKey: commandKey}
 
@@ -418,6 +607,10 @@ func main() {
 			if !success {
 				fmt.Printf("Prune failed for %s\n", repoArg)
 			}
+		}
+	case "gentimer":
+		if err := generateTimers(config); err != nil {
+			fmt.Printf("Error generating timers: %v\n", err)
 		}
 	default:
 		printUsage()

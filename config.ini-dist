@@ -1,6 +1,7 @@
 [general]
 ; if hostID=hostname, the actual hostname of the machine will be shown
 hostID=hostname
+retention_prune = 14
 
 [smtp]
 enabled = false
@@ -17,6 +18,7 @@ directory = /var/www
 retention_daily = 4
 retention_weekly = 7
 retention_monthly = 3
+retention_prune = 14
 
 [mysql:maindb]
 bucket = b2:bucket:mariadb/

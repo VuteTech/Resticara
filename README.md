@@ -12,6 +12,7 @@ Resticara is a wrapper around [Restic](https://restic.net/), designed to simplif
 * Syslog Integration: Logging to syslog is enabled by default for better traceability.
 * Email Notifications: Can be configured to send emails upon backup completion or failure.
 * Single Binary: Written in Go, Resticara is distributed as a single binary—making it extremely easy to deploy.
+ * Systemd Timer Generation: Create and activate systemd timers with `resticara gentimer`.
 
 ## Installation [WIP]
 You can download the latest version of Resticara from the [Releases](https://github.com/VuteTech/Resticara/releases) page. Available as a `zip` file, `deb` or `rpm` packages for easy installation on various systems.
@@ -27,11 +28,13 @@ resticara prune all                   # prune all repositories
 resticara prune b2:bucket:wpsites/    # prune a single repository
 ```
 
+## Generating systemd timers
+Run `resticara gentimer` to generate systemd service and timer files for each configured backup, writing them to the systemd unit directory. Existing timers are restarted to pick up changes and any timers without a matching configuration are disabled and removed. Prune timers run every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
+
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.
 * Support for more operating systems.
 * Better syntax of the Syslog logs.
-* Automated creation of SystemD timers?
 * Integrated Prometheus exporter
 * Option of running tasks for different repositories in parallel
 * A website and documentation
