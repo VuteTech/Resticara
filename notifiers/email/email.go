@@ -1,4 +1,4 @@
-package emailsender
+package email
 
 import (
 	"fmt"
@@ -16,13 +16,13 @@ type EmailConfig struct {
 	Body       string
 }
 
-type EmailSender interface {
+type EmailNotifier interface {
 	Send(emailConfig EmailConfig) error
 }
 
-type SmtpEmailSender struct{}
+type SmtpEmailNotifier struct{}
 
-func (s SmtpEmailSender) Send(emailConfig EmailConfig) error {
+func (s SmtpEmailNotifier) Send(emailConfig EmailConfig) error {
 	message := "From: " + emailConfig.From + "\n" +
 		"To: " + emailConfig.To + "\n" +
 		"Subject: " + emailConfig.Subject + "\n\n" +

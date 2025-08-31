@@ -1,4 +1,4 @@
-package telegramsender
+package telegram
 
 import (
 	"fmt"
@@ -12,13 +12,13 @@ type TelegramConfig struct {
 	Message  string
 }
 
-type TelegramSender interface {
+type TelegramNotifier interface {
 	Send(cfg TelegramConfig) error
 }
 
-type BotAPISender struct{}
+type BotAPINotifier struct{}
 
-func (s BotAPISender) Send(cfg TelegramConfig) error {
+func (s BotAPINotifier) Send(cfg TelegramConfig) error {
 	bot, err := tgbotapi.NewBotAPI(cfg.BotToken)
 	if err != nil {
 		return fmt.Errorf("failed to create bot: %w", err)
