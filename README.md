@@ -29,7 +29,7 @@ resticara prune b2:bucket:wpsites/    # prune a single repository
 ```
 
 ## Generating systemd timers
-Run `resticara gentimer` to generate systemd service and timer files for each configured backup, writing them to the systemd unit directory and enabling them immediately. Prune timers run every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
+Run `resticara gentimer` to generate systemd service and timer files for each configured backup, writing them to the systemd unit directory. Existing timers are restarted to pick up changes and any timers without a matching configuration are disabled and removed. Prune timers run every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
 
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.

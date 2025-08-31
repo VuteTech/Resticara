@@ -279,7 +279,14 @@ func generateTimers(config Config) error {
 		return fmt.Errorf("could not determine systemd unit directory from UnitPath: %s", unitLine)
 	}
 
-	var timers []string
+	type timerUnit struct {
+		commandKey string
+		sanitized  string
+		bucket     string
+		pruneDays  int
+	}
+	var units []timerUnit
+	expected := make(map[string]struct{})
 	for commandKey, settings := range config.Commands {
 		sanitized := sanitizeName(commandKey)
 		pruneDays := config.RetentionPrune
@@ -289,7 +296,43 @@ func generateTimers(config Config) error {
 			}
 		}
 		bucket := settings["bucket"]
+		units = append(units, timerUnit{
+			commandKey: commandKey,
+			sanitized:  sanitized,
+			bucket:     bucket,
+			pruneDays:  pruneDays,
+		})
+		expected["resticara-"+sanitized] = struct{}{}
+		expected["resticara-"+sanitized+"-prune"] = struct{}{}
+	}
 
+	entries, err := os.ReadDir(unitDir)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]struct{})
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "resticara-") {
+			continue
+		}
+		if !(strings.HasSuffix(name, ".service") || strings.HasSuffix(name, ".timer")) {
+			continue
+		}
+		base := strings.TrimSuffix(strings.TrimSuffix(name, ".service"), ".timer")
+		existing[base] = struct{}{}
+	}
+	for base := range existing {
+		if _, ok := expected[base]; !ok {
+			exec.Command("systemctl", "disable", "--now", base+".timer").Run()
+			exec.Command("systemctl", "disable", "--now", base+".service").Run()
+			os.Remove(filepath.Join(unitDir, base+".timer"))
+			os.Remove(filepath.Join(unitDir, base+".service"))
+		}
+	}
+
+	var timers []string
+	for _, u := range units {
 		backupService := fmt.Sprintf(`[Unit]
 Description=Resticara backup for %s
 
@@ -299,7 +342,7 @@ ExecStart=/usr/local/bin/resticara run %s
 
 [Install]
 WantedBy=multi-user.target
-`, commandKey, commandKey)
+`, u.commandKey, u.commandKey)
 
 		backupTimer := fmt.Sprintf(`[Unit]
 Description=Resticara backup timer for %s
@@ -310,7 +353,7 @@ Persistent=true
 
 [Install]
 WantedBy=timers.target
-`, commandKey)
+`, u.commandKey)
 
 		pruneService := fmt.Sprintf(`[Unit]
 Description=Resticara prune for %s
@@ -321,7 +364,7 @@ ExecStart=/usr/local/bin/resticara prune %s
 
 [Install]
 WantedBy=multi-user.target
-`, commandKey, bucket)
+`, u.commandKey, u.bucket)
 
 		pruneTimer := fmt.Sprintf(`[Unit]
 Description=Resticara prune timer for %s
@@ -332,22 +375,22 @@ Persistent=true
 
 [Install]
 WantedBy=timers.target
-`, commandKey, pruneDays)
+`, u.commandKey, u.pruneDays)
 
-		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.service", sanitized)), []byte(backupService), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.service", u.sanitized)), []byte(backupService), 0644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.timer", sanitized)), []byte(backupTimer), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.timer", u.sanitized)), []byte(backupTimer), 0644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.service", sanitized)), []byte(pruneService), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.service", u.sanitized)), []byte(pruneService), 0644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.timer", sanitized)), []byte(pruneTimer), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.timer", u.sanitized)), []byte(pruneTimer), 0644); err != nil {
 			return err
 		}
-		timers = append(timers, fmt.Sprintf("resticara-%s.timer", sanitized))
-		timers = append(timers, fmt.Sprintf("resticara-%s-prune.timer", sanitized))
+		timers = append(timers, fmt.Sprintf("resticara-%s.timer", u.sanitized))
+		timers = append(timers, fmt.Sprintf("resticara-%s-prune.timer", u.sanitized))
 	}
 
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
@@ -357,8 +400,8 @@ WantedBy=timers.target
 		if err := exec.Command("systemctl", "enable", t).Run(); err != nil {
 			return fmt.Errorf("failed to enable %s: %v", t, err)
 		}
-		if err := exec.Command("systemctl", "start", t).Run(); err != nil {
-			return fmt.Errorf("failed to start %s: %v", t, err)
+		if err := exec.Command("systemctl", "restart", t).Run(); err != nil {
+			return fmt.Errorf("failed to restart %s: %v", t, err)
 		}
 	}
 
