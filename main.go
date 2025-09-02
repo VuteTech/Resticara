@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"gopkg.in/ini.v1"
+	htmlTemplate "html/template"
 	"resticara/notifiers/email"
 	"resticara/notifiers/matrix"
 	"resticara/notifiers/telegram"
@@ -563,6 +564,34 @@ func main() {
 			return
 		}
 
+		var matrixMessageBuffer bytes.Buffer
+		if config.MatrixEnabled {
+			matrixTemplatePath := filepath.Join("templates", "matrix_template.html")
+			matrixTmpl, err := htmlTemplate.ParseFiles(matrixTemplatePath)
+			if err != nil {
+				fmt.Println("Error parsing matrix template:", err)
+				return
+			}
+			if err := matrixTmpl.Execute(&matrixMessageBuffer, mailData); err != nil {
+				fmt.Println("Error executing matrix template:", err)
+				return
+			}
+		}
+
+		var telegramMessageBuffer bytes.Buffer
+		if config.TelegramEnabled {
+			telegramTemplatePath := filepath.Join("templates", "telegram_template.html")
+			telegramTmpl, err := htmlTemplate.ParseFiles(telegramTemplatePath)
+			if err != nil {
+				fmt.Println("Error parsing telegram template:", err)
+				return
+			}
+			if err := telegramTmpl.Execute(&telegramMessageBuffer, mailData); err != nil {
+				fmt.Println("Error executing telegram template:", err)
+				return
+			}
+		}
+
 		printSummary(mailData, logwriter)
 
 		if config.SMTPEnabled {
@@ -591,7 +620,7 @@ func main() {
 
 		if config.MatrixEnabled {
 			matrixNotifier := matrix.GomatrixNotifier{}
-			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
+			message := matrixMessageBuffer.String()
 			matrixConfig := matrix.MatrixConfig{
 				Homeserver: config.MatrixServer,
 				Username:   config.MatrixUser,
@@ -611,7 +640,7 @@ func main() {
 
 		if config.TelegramEnabled {
 			telegramNotifier := telegram.BotAPINotifier{}
-			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
+			message := telegramMessageBuffer.String()
 			telegramConfig := telegram.TelegramConfig{
 				BotToken: config.TelegramToken,
 				ChatID:   config.TelegramChatID,
