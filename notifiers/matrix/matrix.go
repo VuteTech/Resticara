@@ -41,7 +41,8 @@ func (s GomatrixNotifier) Send(cfg MatrixConfig) error {
 		// attempt to continue even if already joined
 	}
 
-	if _, err := cli.SendText(cfg.RoomID, cfg.Message); err != nil {
+	htmlMsg := gomatrix.GetHTMLMessage("m.text", cfg.Message)
+	if _, err := cli.SendMessageEvent(cfg.RoomID, "m.room.message", htmlMsg); err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 	return nil

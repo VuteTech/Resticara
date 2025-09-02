@@ -24,6 +24,7 @@ func (s BotAPINotifier) Send(cfg TelegramConfig) error {
 		return fmt.Errorf("failed to create bot: %w", err)
 	}
 	msg := tgbotapi.NewMessage(cfg.ChatID, cfg.Message)
+	msg.ParseMode = tgbotapi.ModeHTML
 	if _, err := bot.Send(msg); err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
