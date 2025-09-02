@@ -1,0 +1,11 @@
+<b>{{if eq .StatusMessage "Backup successful"}}✅ Backup successful{{else}}❌ Backup failed{{end}} for {{.HostID}}</b><br/>
+<i>{{.Date}}</i><br/><br/>
+{{range .Commands}}
+<b>📦 {{.CommandKey}}</b><br/>
+<pre><code>$ {{.BackupCmd}}
+{{.BackupOutput}}</code></pre>
+<pre><code>$ {{.ForgetCmd}}
+{{.ForgetOutput}}</code></pre>
+{{end}}
+<hr/>
+<b>{{.StatusMessage}}</b>

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"gopkg.in/ini.v1"
+	htmlTemplate "html/template"
 	"resticara/notifiers/email"
 	"resticara/notifiers/matrix"
 	"resticara/notifiers/telegram"
@@ -563,6 +564,20 @@ func main() {
 			return
 		}
 
+		var chatMessageBuffer bytes.Buffer
+		if config.MatrixEnabled || config.TelegramEnabled {
+			chatTemplatePath := filepath.Join("templates", "matrix_template.html")
+			chatTmpl, err := htmlTemplate.ParseFiles(chatTemplatePath)
+			if err != nil {
+				fmt.Println("Error parsing chat template:", err)
+				return
+			}
+			if err := chatTmpl.Execute(&chatMessageBuffer, mailData); err != nil {
+				fmt.Println("Error executing chat template:", err)
+				return
+			}
+		}
+
 		printSummary(mailData, logwriter)
 
 		if config.SMTPEnabled {
@@ -591,7 +606,7 @@ func main() {
 
 		if config.MatrixEnabled {
 			matrixNotifier := matrix.GomatrixNotifier{}
-			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
+			message := chatMessageBuffer.String()
 			matrixConfig := matrix.MatrixConfig{
 				Homeserver: config.MatrixServer,
 				Username:   config.MatrixUser,
@@ -611,7 +626,7 @@ func main() {
 
 		if config.TelegramEnabled {
 			telegramNotifier := telegram.BotAPINotifier{}
-			message := mailData.StatusMessage + "---" + time.Now().Format(time.RFC1123) + "\n\n" + mailMessageBuffer.String()
+			message := chatMessageBuffer.String()
 			telegramConfig := telegram.TelegramConfig{
 				BotToken: config.TelegramToken,
 				ChatID:   config.TelegramChatID,
