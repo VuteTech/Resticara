@@ -89,7 +89,9 @@ exit 2
 `)
 	config := e.writeConfig(baseConfig + mysqlJob("site", dbRepo, "site_db") + dirJob("site", dirRepo, e.path("data")))
 
-	e.resticara("--config="+config, "run").expect(t, 1, "Status: BACKUP FAILED!", "Access denied")
+	// restic does not always pass on the dump's own error message before it exits,
+	// so check for restic's failure message, which is always there
+	e.resticara("--config="+config, "run").expect(t, 1, "Status: BACKUP FAILED!", "command failed: exit status 2")
 
 	// a failed dump must not be stored, while the other job still runs
 	if n := len(e.snapshots(dbRepo)); n != 0 {

@@ -26,16 +26,16 @@ func TestCommands(t *testing.T) {
 		got  Command
 		want Command
 	}{
-		{"dir backup", BackupCommand(dir), Command{"restic", "-r", "b2:bucket:website/", "--retry-lock", "30m", "backup", "/var/www/site", "/srv/My Files"}},
-		{"mysql backup", BackupCommand(mysql), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "backup", "--stdin-filename", "site_db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "--routines", "--events", "site_db"}},
+		{"dir backup", BackupCommand(dir, ""), Command{"restic", "-r", "b2:bucket:website/", "--retry-lock", "30m", "backup", "/var/www/site", "/srv/My Files"}},
+		{"mysql backup", BackupCommand(mysql, ""), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "backup", "--stdin-filename", "site_db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "--routines", "--events", "site_db"}},
 		// the snapshot path stays "<database>.sql", so existing snapshots keep their group for forget
-		{"all databases", BackupCommand(allDatabases), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--stdin-filename", "--all-databases.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "--all-databases"}},
-		{"dir backup with excludes", BackupCommand(excluding), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup",
+		{"all databases", BackupCommand(allDatabases, ""), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--stdin-filename", "--all-databases.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "--all-databases"}},
+		{"dir backup with excludes", BackupCommand(excluding, ""), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup",
 			"--exclude=*.tmp", "--exclude=-weird", "--exclude-file=/etc/resticara/site.exclude", "--exclude-caches", "--exclude-if-present=.nobackup", "/var/www"}},
 		// excludes are only for directories, a mysql job never gets them
-		{"mysql backup ignores excludes", BackupCommand(config.Job{Type: config.JobMySQL, Repository: "/repo", Database: "db", Exclude: config.Exclude{Caches: true}}),
+		{"mysql backup ignores excludes", BackupCommand(config.Job{Type: config.JobMySQL, Repository: "/repo", Database: "db", Exclude: config.Exclude{Caches: true}}, ""),
 			Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--stdin-filename", "db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "db"}},
-		{"forget", ForgetCommand(mysql), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "forget", "--keep-daily", "2", "--keep-weekly", "7", "--keep-monthly", "3"}},
+		{"forget", ForgetCommand(mysql, ""), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "forget", "--keep-daily", "2", "--keep-weekly", "7", "--keep-monthly", "3"}},
 		{"prune", PruneCommand("b2:bucket:mysql/"), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "prune"}},
 	}
 	for _, tt := range tests {
@@ -85,5 +85,37 @@ func TestExecRunner(t *testing.T) {
 		if res.ExitCode != tt.exitCode || res.Stdout != tt.stdout {
 			t.Errorf("Run(%q) = %+v, want exit code %d and stdout %q", tt.cmd, res, tt.exitCode, tt.stdout)
 		}
+	}
+}
+
+func TestHostArgs(t *testing.T) {
+	dir := config.Job{Type: config.JobDir, Repository: "/repo", Directories: []string{"/var/www"}, Retention: config.Retention{Daily: 2, Weekly: 7, Monthly: 3}}
+	mysql := config.Job{Type: config.JobMySQL, Repository: "/repo", Database: "db"}
+
+	tests := []struct {
+		name string
+		got  Command
+		want Command
+	}{
+		{"dir backup", BackupCommand(dir, "server-1"), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--host", "server-1", "/var/www"}},
+		{"mysql backup", BackupCommand(mysql, "server-1"), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--host", "server-1", "--stdin-filename", "db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "db"}},
+		{"forget", ForgetCommand(dir, "server-1"), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "forget", "--host", "server-1", "--keep-daily", "2", "--keep-weekly", "7", "--keep-monthly", "3"}},
+		{"snapshots", SnapshotsCommand("/repo"), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "snapshots", "--json"}},
+	}
+	for _, tt := range tests {
+		if !reflect.DeepEqual(tt.got, tt.want) {
+			t.Errorf("%s:\n got %q\nwant %q", tt.name, tt.got, tt.want)
+		}
+	}
+}
+
+func TestSnapshotPaths(t *testing.T) {
+	dir := config.Job{Type: config.JobDir, Directories: []string{"/var/www/", "/etc/nginx"}}
+	if got := SnapshotPaths(dir); !reflect.DeepEqual(got, []string{"/etc/nginx", "/var/www"}) {
+		t.Errorf("dir paths = %q", got)
+	}
+	mysql := config.Job{Type: config.JobMySQL, Database: "--all-databases"}
+	if got := SnapshotPaths(mysql); !reflect.DeepEqual(got, []string{"/--all-databases.sql"}) {
+		t.Errorf("mysql paths = %q", got)
 	}
 }

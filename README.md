@@ -29,6 +29,15 @@ Every backup is a section named `type:name`:
 
 Both need `bucket` (the restic repository) and `retention_daily`, `retention_weekly` and `retention_monthly`. Changing the directories of a job starts a new snapshot group in restic, so the old snapshots are no longer removed by the retention rules; remove them once with `restic forget --path`.
 
+### Host name
+`hostID` in `[general]` names this machine in reports. When it is set to a name (anything but `hostname`), resticara also passes it to restic as `--host`: snapshots are recorded under that name, and the retention rules only remove this host's snapshots, so several servers can share a repository safely. With `hostID = hostname` restic uses the machine's hostname, as before.
+
+If a machine already has snapshots under its hostname and `hostID` is set to a different name later, the old snapshots are no longer covered by the retention rules. The report then shows a note with the command that assigns them to `hostID` once, for example:
+
+```
+restic -r b2:example-bucket:website/ rewrite --new-host server-1 --forget --host old-hostname --path /var/www/example.com
+```
+
 ### Excluding files
 `dir:` jobs can leave files out of the backup. Set these in `[general]` to apply them to every `dir:` job, or in a job section; the values from both are combined:
 
