@@ -4,6 +4,7 @@ package integration
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -84,6 +85,15 @@ func TestGentimer(t *testing.T) {
 		"Environment=RESTIC_CACHE_DIR=/var/cache/resticara",
 		"CacheDirectory=resticara",
 	)
+	expectLines(t, "resticara-backup.service", unit("resticara-backup.service"),
+		"TimeoutStartSec=20h",
+		"Nice=10",
+		"IOSchedulingClass=best-effort",
+		"ProtectSystem=strict",
+		"ProtectHome=read-only",
+		// the local repository stays writable inside the sandbox; the B2 one needs nothing
+		"ReadWritePaths=-/srv/repo-a",
+	)
 	expectLines(t, "resticara-backup.timer", unit("resticara-backup.timer"), "OnCalendar=daily", "Persistent=true")
 	expectLines(t, repoA+".service", unit(repoA+".service"),
 		"Description=Resticara prune for /srv/repo-a",
@@ -103,6 +113,24 @@ func TestGentimer(t *testing.T) {
 		"EnvironmentFile=-"+e.path("restic.env"),
 	)
 	expectLines(t, checkA+".timer", unit(checkA+".timer"), "OnActiveSec=6h", "OnUnitActiveSec=30d", "RandomizedDelaySec=1h")
+	expectLines(t, mysql+".service", unit(mysql+".service"), "TimeoutStartSec=12h", "ProtectSystem=strict")
+	if strings.Contains(unit(mysql+".service"), "ReadWritePaths") {
+		t.Errorf("the prune of a B2 repository got ReadWritePaths:\n%s", unit(mysql+".service"))
+	}
+
+	// let systemd itself check the generated units where it is available
+	if _, err := exec.LookPath("systemd-analyze"); err == nil {
+		var paths []string
+		for _, f := range files {
+			if strings.HasPrefix(f, "resticara-") {
+				paths = append(paths, filepath.Join(unitDir, f))
+			}
+		}
+		verify := exec.Command("systemd-analyze", append([]string{"verify", "--man=no"}, paths...)...)
+		if out, err := verify.CombinedOutput(); err != nil || len(strings.TrimSpace(string(out))) > 0 {
+			t.Errorf("systemd-analyze verify: %v\n%s", err, out)
+		}
+	}
 
 	var disabled []string
 	for _, base := range []string{"resticara-dir-a", "resticara-dir-a-prune", "resticara-dir-old"} {

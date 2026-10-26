@@ -579,3 +579,44 @@ dir:a and dir:b use repository /shared but set different check_read_data_subset`
 		t.Errorf("error:\n%v\nwant:\n%s", err, want)
 	}
 }
+
+func TestLoadSystemd(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "[smtp]\nenabled = false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Systemd{Hardening: true, Nice: 10, IOSchedulingClass: "best-effort", BackupTimeout: "20h", MaintenanceTimeout: "12h"}
+	if !reflect.DeepEqual(cfg.Systemd, want) {
+		t.Errorf("defaults = %+v", cfg.Systemd)
+	}
+
+	cfg, err = Load(writeConfig(t, `[smtp]
+enabled = false
+[systemd]
+hardening = false
+nice = -5
+io_scheduling_class = idle
+backup_timeout = 1d 12h
+maintenance_timeout = infinity
+read_write_paths = /root/.config/rclone
+read_write_paths = /srv/extra
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = Systemd{Nice: -5, IOSchedulingClass: "idle", BackupTimeout: "1d 12h", MaintenanceTimeout: "infinity", ReadWritePaths: []string{"/root/.config/rclone", "/srv/extra"}}
+	if !reflect.DeepEqual(cfg.Systemd, want) {
+		t.Errorf("Systemd = %+v", cfg.Systemd)
+	}
+
+	_, err = Load(writeConfig(t, "[systemd]\nhardening = sometimes\nnice = 20\nio_scheduling_class = realtime\nbackup_timeout = forever\nmaintenance_timeout = 2 fortnights\nread_write_paths = relative/path\n"))
+	wantErr := `'hardening' in [systemd] must be true or false, got "sometimes"
+'nice' in [systemd] must be an integer from -20 to 19, got "20"
+'io_scheduling_class' in [systemd] must be best-effort or idle, got "realtime"
+'backup_timeout' in [systemd] must be a time span such as 20h, 90min or infinity, got "forever"
+'maintenance_timeout' in [systemd] must be a time span such as 20h, 90min or infinity, got "2 fortnights"
+'read_write_paths' in [systemd] must be absolute paths, got "relative/path"`
+	if err == nil || err.Error() != wantErr {
+		t.Errorf("error:\n%v\nwant:\n%s", err, wantErr)
+	}
+}

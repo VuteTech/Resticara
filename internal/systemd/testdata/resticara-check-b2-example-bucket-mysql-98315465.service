@@ -9,6 +9,17 @@ ExecStart=/usr/local/bin/resticara --config=/etc/resticara/config.ini check b2:e
 EnvironmentFile=-/etc/resticara/restic.env
 Environment=RESTIC_CACHE_DIR=/var/cache/resticara
 CacheDirectory=resticara
+TimeoutStartSec=12h
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
 
 [Install]
 WantedBy=multi-user.target

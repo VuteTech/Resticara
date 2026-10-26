@@ -124,6 +124,25 @@ A failed check is always reported through the enabled notification channels; use
 ## Generating systemd timers
 Run `resticara gentimer` as root to generate systemd service and timer files that run the `resticara` binary used for the command, writing them to the systemd unit directory. A single daily `resticara-backup.timer` runs all configured backups one after another and sends one report, and each repository gets one prune timer (`resticara-prune-<repository>-<hash>.timer`) and one check timer (`resticara-check-<repository>-<hash>.timer`), however many jobs back up to it. The first check runs six hours after `gentimer`, the first prune after one hour. Existing timers are restarted to pick up changes and any timers without a matching configuration, including the per-job prune timers of older versions, are disabled and removed. Prune timers first run an hour after they are started and then every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup); a repository used by several jobs is pruned as often as the most frequent of them asks for.
 
+### Resource limits and sandboxing
+The generated services run with a lower priority (`Nice=10`, batch CPU scheduling, the lowest best-effort I/O priority), so backups do not slow down the web sites and databases they back up. A backup run is stopped after 20 hours and a prune or check after 12 hours, so a hung run cannot block the next one.
+
+They are also sandboxed: the system and home directories are read-only (`ProtectSystem=strict`, `ProtectHome=read-only`), `/tmp` is private and privileges cannot be raised. Local repositories (`local:/path` or `/path`) and the restic cache stay writable; repositories on B2, S3, SFTP and other remote backends need no local write access. Backed up directories only need to be readable, so they can be anywhere, including `/home`.
+
+The `[systemd]` section changes these settings; run `resticara gentimer` again afterwards:
+
+```
+[systemd]
+nice = 10                      ; -20 (highest) to 19 (lowest)
+io_scheduling_class = idle     ; best-effort (default) or idle; idle only uses the disk when nothing else does
+backup_timeout = 20h           ; systemd time span, or infinity
+maintenance_timeout = 12h      ; prune and check
+read_write_paths = /root/.config/rclone   ; more writable paths, one line each
+hardening = false              ; turn the sandbox off
+```
+
+Backends that write outside the repository, such as rclone refreshing its tokens, need their paths in `read_write_paths`. restic keeps retrying when it cannot write to a repository, so a run without the needed write access hangs until the timeout instead of failing at once.
+
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.
 * Support for more operating systems.

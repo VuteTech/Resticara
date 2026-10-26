@@ -49,6 +49,15 @@ enabled = false
 ;prune_url = https://hc-ping.com/<uuid>
 ;check_url = https://hc-ping.com/<uuid>
 
+;; settings for the units created by gentimer, see the README
+;[systemd]
+;nice = 10
+;io_scheduling_class = best-effort
+;backup_timeout = 20h
+;maintenance_timeout = 12h
+;read_write_paths = /root/.config/rclone
+;hardening = true
+
 [dir:website]
 bucket = b2:bucket:wpsites/
 ; one line per directory
