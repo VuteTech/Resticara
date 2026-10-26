@@ -168,7 +168,7 @@ func TestGenerate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Systemd timer files written to "+unitDir+" and activated.") ||
-		!strings.Contains(out.String(), filepath.Join(configDir, EnvFile)+" not found") {
+		!strings.Contains(out.String(), filepath.Join(configDir, config.EnvFile)+" not found") {
 		t.Errorf("output = %q", out.String())
 	}
 	content, err := os.ReadFile(filepath.Join(unitDir, pruneUnitBase("/repo")+".service"))
@@ -180,7 +180,7 @@ func TestGenerate(t *testing.T) {
 	}
 
 	// an env file readable by other users gets a warning instead
-	if err := os.WriteFile(filepath.Join(configDir, EnvFile), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, config.EnvFile), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()

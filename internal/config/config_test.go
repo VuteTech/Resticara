@@ -99,8 +99,9 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.SMTP.Enabled || cfg.Matrix.Enabled || cfg.Telegram.Enabled {
-		t.Errorf("enabled: smtp=%v matrix=%v telegram=%v, want true false false", cfg.SMTP.Enabled, cfg.Matrix.Enabled, cfg.Telegram.Enabled)
+	// without a server, email is off, so an empty config does not fail to send mail
+	if cfg.SMTP.Enabled || cfg.Matrix.Enabled || cfg.Telegram.Enabled || len(cfg.Warnings) != 0 {
+		t.Errorf("enabled: smtp=%v matrix=%v telegram=%v, warnings %q; want all off", cfg.SMTP.Enabled, cfg.Matrix.Enabled, cfg.Telegram.Enabled, cfg.Warnings)
 	}
 	if cfg.General.RetentionPrune != 30 || len(cfg.Jobs) != 0 {
 		t.Errorf("RetentionPrune = %d, jobs = %d", cfg.General.RetentionPrune, len(cfg.Jobs))
@@ -251,7 +252,7 @@ retention_monthly = 1
 	if job := cfg.Jobs[1]; job.Database != "--all-databases" || !reflect.DeepEqual(job.MysqldumpArgs, []string{"--routines", "--events"}) {
 		t.Errorf("mysql job = %+v", job)
 	}
-	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "email is enabled by default") {
+	if len(cfg.Warnings) != 0 {
 		t.Errorf("Warnings = %q", cfg.Warnings)
 	}
 }
@@ -458,7 +459,7 @@ retention_monthly = 1
 		t.Error("job patterns share memory with [general]")
 	}
 
-	if len(cfg.Warnings) != 2 || cfg.Warnings[1] != "unknown key 'exclude' in [mysql:db] is ignored" {
+	if len(cfg.Warnings) != 1 || cfg.Warnings[0] != "unknown key 'exclude' in [mysql:db] is ignored" {
 		t.Errorf("Warnings = %q", cfg.Warnings)
 	}
 }
@@ -618,5 +619,99 @@ read_write_paths = /srv/extra
 'read_write_paths' in [systemd] must be absolute paths, got "relative/path"`
 	if err == nil || err.Error() != wantErr {
 		t.Errorf("error:\n%v\nwant:\n%s", err, wantErr)
+	}
+}
+
+func TestLoadSMTP(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "[smtp]\nserver = mail.example.com\nport = 587\nfrom = bot@example.com\nto = admin@example.com, ops@example.com ,,\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// with a server and no enabled line, email is on, as before
+	if !cfg.SMTP.Enabled || !reflect.DeepEqual(cfg.SMTP.To, []string{"admin@example.com", "ops@example.com"}) || len(cfg.Warnings) != 0 {
+		t.Errorf("SMTP = %+v, warnings %q", cfg.SMTP, cfg.Warnings)
+	}
+
+	cfg, err = Load(writeConfig(t, "[smtp]\nenabled = true\n"))
+	if err != nil || !cfg.SMTP.Enabled || len(cfg.Warnings) != 1 || cfg.Warnings[0] != "[smtp] is enabled but 'server', 'port', 'from', 'to' not set, so email cannot be sent" {
+		t.Errorf("explicitly enabled: %+v, %q, %v", cfg.SMTP, cfg.Warnings, err)
+	}
+}
+
+func TestLoadSecretsFromEnvironment(t *testing.T) {
+	t.Setenv("SMTP_PASSWORD", "smtp-secret")
+	t.Setenv("MATRIX_PASSWORD", "matrix-secret")
+	t.Setenv("MATRIX_ACCESS_TOKEN", "matrix-token")
+	t.Setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+
+	cfg, err := Load(writeConfig(t, "[smtp]\nenabled = false\n[matrix]\nenabled = true\nserver = https://matrix.example.com\nroom_id = !r:x\n[telegram]\nenabled = true\nchat_id = 42\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SMTP.Pass != "smtp-secret" || cfg.Matrix.Pass != "matrix-secret" || cfg.Matrix.AccessToken != "matrix-token" || cfg.Telegram.BotToken != "123:abc" {
+		t.Errorf("secrets: smtp %q, matrix %q %q, telegram %q", cfg.SMTP.Pass, cfg.Matrix.Pass, cfg.Matrix.AccessToken, cfg.Telegram.BotToken)
+	}
+	// the channels count as configured, so there is no warning
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("Warnings = %q", cfg.Warnings)
+	}
+
+	// a value in the config still wins
+	cfg, err = Load(writeConfig(t, "[smtp]\nenabled = false\npass = from-config\n"))
+	if err != nil || cfg.SMTP.Pass != "from-config" {
+		t.Errorf("Pass = %q, %v", cfg.SMTP.Pass, err)
+	}
+}
+
+func TestLoadEnvFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), EnvFile)
+	content := `# restic
+RESTIC_PASSWORD=plain value
+B2_ACCOUNT_ID = "quoted id"
+B2_ACCOUNT_KEY='single quoted'
+; comment
+RESTICARA_TEST_EMPTY=
+RESTICARA_TEST_EQUALS=a=b=c
+RESTICARA_TEST_SET=from file
+not a variable
+2BAD=x
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"RESTIC_PASSWORD", "B2_ACCOUNT_ID", "B2_ACCOUNT_KEY", "RESTICARA_TEST_EMPTY", "RESTICARA_TEST_EQUALS"} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+	// variables that are already set win over the file
+	t.Setenv("RESTICARA_TEST_SET", "from environment")
+
+	warnings, err := LoadEnvFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"RESTIC_PASSWORD":       "plain value",
+		"B2_ACCOUNT_ID":         "quoted id",
+		"B2_ACCOUNT_KEY":        "single quoted",
+		"RESTICARA_TEST_EMPTY":  "",
+		"RESTICARA_TEST_EQUALS": "a=b=c",
+		"RESTICARA_TEST_SET":    "from environment",
+	}
+	for key, val := range want {
+		if got, ok := os.LookupEnv(key); !ok || got != val {
+			t.Errorf("%s = %q (set %v), want %q", key, got, ok, val)
+		}
+	}
+	wantWarnings := []string{
+		"line 9 of " + path + " is not KEY=VALUE and is ignored",
+		"line 10 of " + path + " is not KEY=VALUE and is ignored",
+	}
+	if !reflect.DeepEqual(warnings, wantWarnings) {
+		t.Errorf("warnings = %q", warnings)
+	}
+
+	if warnings, err := LoadEnvFile(filepath.Join(t.TempDir(), "missing.env")); err != nil || warnings != nil {
+		t.Errorf("missing file: %q, %v", warnings, err)
 	}
 }

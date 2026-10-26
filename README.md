@@ -59,14 +59,19 @@ It lists every error at once, warns about unknown keys (usually typos), notifica
 ## Requirements
 Restic 0.17 or newer is required (MySQL backups use `--stdin-from-command`, so a failed `mysqldump` fails the backup instead of storing a truncated dump).
 
-## Restic credentials
-The repository password and storage credentials are read from the environment. For the systemd timers, put them in `restic.env` next to `config.ini` (e.g. `/etc/resticara/restic.env`), readable only by root:
+## Credentials and secrets
+The repository password and storage credentials are read from the environment. Put them in `restic.env` next to `config.ini` (e.g. `/etc/resticara/restic.env`), readable only by root (`chmod 600`):
 
 ```
 RESTIC_PASSWORD=...
 B2_ACCOUNT_ID=...
 B2_ACCOUNT_KEY=...
+SMTP_PASSWORD=...
 ```
+
+resticara reads this file itself on every start, so manual runs work the same way as the systemd timers, which load it too. Variables that are already set in the environment win over the file. The format is `KEY=VALUE` per line, values may be quoted, and lines starting with `#` or `;` are comments.
+
+The notification secrets can live there as well instead of in `config.ini`: `SMTP_PASSWORD`, `MATRIX_PASSWORD`, `MATRIX_ACCESS_TOKEN` and `TELEGRAM_BOT_TOKEN` are used when the matching key (`pass`, `access_token`, `bot_token`) is empty in `config.ini`. A value in `config.ini` still wins. resticara warns when `config.ini` or `restic.env` can be read by other users.
 
 ## Backup status
 A run is reported as `Backup successful`, `Backup completed with warnings` (restic saved the snapshot but could not read some files, e.g. mail files moved during the backup) or `BACKUP FAILED!`. Resticara exits with a non-zero code on failure, so systemd marks the unit as failed.
@@ -155,7 +160,7 @@ Backends that write outside the repository, such as rclone refreshing its tokens
 Resticara logs all its activities to syslog by default, so you can easily monitor its actions and diagnose any potential issues.
 
 ## Email Notifications
-To set up email notifications, edit the corresponding fields in the `config.ini` file. Port 587 uses STARTTLS, port 465 implicit TLS.
+To set up email notifications, edit the corresponding fields in the `config.ini` file. Port 587 uses STARTTLS, port 465 implicit TLS. `to` takes several addresses separated by commas. Email is enabled when `[smtp]` has a `server`, unless `enabled = false` is set.
 
 ## Matrix and Telegram Notifications
 Matrix can log in with `username`/`pass` (the session is logged out after each message) or use an `access_token`. Telegram reports longer than Telegram's 4096 character limit are sent as truncated plain text.
