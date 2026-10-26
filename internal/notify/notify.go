@@ -4,7 +4,6 @@ package notify
 import (
 	"fmt"
 	"io"
-	"time"
 
 	"resticara/internal/config"
 	"resticara/internal/report"
@@ -48,7 +47,7 @@ func (n Notifiers) Send(cfg config.Config, r report.Report, m Messages, out io.W
 			To:         cfg.SMTP.To,
 			SmtpServer: cfg.SMTP.Server,
 			SmtpPort:   cfg.SMTP.Port,
-			Subject:    r.StatusMessage + "---" + time.Now().Format(time.RFC1123),
+			Subject:    r.Subject,
 			Body:       m.Mail,
 		})
 		if err != nil {

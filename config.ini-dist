@@ -6,6 +6,8 @@
 ; Any other name is also passed to restic as --host, so retention only removes
 ; this host's snapshots (see the README before changing it on an existing setup).
 hostID=hostname
+; always: send a report after every run; problems: only for warnings and failures
+;notify = always
 retention_prune = 14
 ;; excludes in [general] apply to every dir job
 ;exclude = *.tmp

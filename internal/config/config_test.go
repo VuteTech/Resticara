@@ -64,7 +64,7 @@ anything = goes
 		t.Fatal(err)
 	}
 
-	if !reflect.DeepEqual(cfg.General, General{HostID: "server-1", RetentionPrune: 21}) {
+	if !reflect.DeepEqual(cfg.General, General{HostID: "server-1", RetentionPrune: 21, Notify: NotifyAlways}) {
 		t.Errorf("General = %+v", cfg.General)
 	}
 	// SMTP is enabled unless disabled explicitly
@@ -446,5 +446,22 @@ func TestPathWarningsExcludeFile(t *testing.T) {
 	want := fmt.Sprintf("exclude file %q of dir:site does not exist", missing)
 	if got := cfg.PathWarnings(); len(got) != 1 || got[0] != want {
 		t.Errorf("PathWarnings = %q", got)
+	}
+}
+
+func TestLoadNotify(t *testing.T) {
+	for content, want := range map[string]Notify{
+		"":                               NotifyAlways,
+		"[general]\nnotify = always\n":   NotifyAlways,
+		"[general]\nnotify = problems\n": NotifyProblems,
+	} {
+		cfg, err := Load(writeConfig(t, content+"[smtp]\nenabled = false\n"))
+		if err != nil || cfg.General.Notify != want {
+			t.Errorf("%q: Notify = %q, %v; want %q", content, cfg.General.Notify, err, want)
+		}
+	}
+	_, err := Load(writeConfig(t, "[general]\nnotify = never\n"))
+	if err == nil || err.Error() != `'notify' in [general] must be always or problems, got "never"` {
+		t.Errorf("error = %v", err)
 	}
 }

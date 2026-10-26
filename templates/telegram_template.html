@@ -1,8 +1,9 @@
-<b>{{if eq .StatusMessage "Backup successful"}}✅ Backup successful{{else if eq .StatusMessage "Backup completed with warnings"}}⚠️ Backup completed with warnings{{else}}❌ Backup failed{{end}} for {{.HostID}}</b>
+<b>{{if eq .Status "success"}}✅{{else if eq .Status "warning"}}⚠️{{else}}❌{{end}} {{.Subject}}</b>
 
 <i>{{.Date}}</i>
 
-
+{{range .Commands}}{{if eq .Status "success"}}✅{{else if eq .Status "warning"}}⚠️{{else}}❌{{end}} <b>{{.CommandKey}}</b> {{.StatusLabel}} ({{.Duration}})
+{{end}}
 {{range .Commands}}
 <b>📦 {{.CommandKey}}</b>
 <pre><code>$ {{.BackupCmd}}

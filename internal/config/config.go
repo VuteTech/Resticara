@@ -30,7 +30,18 @@ type General struct {
 	RetentionPrune int
 	// Exclude applies to every dir job.
 	Exclude Exclude
+	// Notify says when reports are sent.
+	Notify Notify
 }
+
+type Notify string
+
+const (
+	// NotifyAlways sends a report after every run.
+	NotifyAlways Notify = "always"
+	// NotifyProblems only sends reports for runs with warnings or failures.
+	NotifyProblems Notify = "problems"
+)
 
 // Exclude selects files that dir jobs leave out of the backup.
 type Exclude struct {
@@ -119,7 +130,7 @@ func (e *Error) Error() string {
 var excludeKeys = []string{"exclude", "exclude_file", "exclude_caches", "exclude_if_present"}
 
 var knownKeys = map[string][]string{
-	"general":  append([]string{"hostID", "retention_prune"}, excludeKeys...),
+	"general":  append([]string{"hostID", "retention_prune", "notify"}, excludeKeys...),
 	"smtp":     {"enabled", "from", "username", "pass", "to", "server", "port"},
 	"matrix":   {"enabled", "server", "username", "pass", "room_id", "access_token"},
 	"telegram": {"enabled", "bot_token", "chat_id"},
@@ -169,6 +180,14 @@ func (p *parser) parse(file *ini.File) Config {
 		HostID:         value(general, "hostID"),
 		RetentionPrune: p.pruneDays(general, "[general]", 30),
 		Exclude:        p.exclude(general, Exclude{}),
+		Notify:         NotifyAlways,
+	}
+	switch notify := Notify(value(general, "notify")); notify {
+	case "":
+	case NotifyAlways, NotifyProblems:
+		cfg.General.Notify = notify
+	default:
+		p.errorf("'notify' in [general] must be always or problems, got %q", notify)
 	}
 
 	smtp := file.Section("smtp")

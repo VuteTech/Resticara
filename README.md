@@ -71,6 +71,12 @@ B2_ACCOUNT_KEY=...
 ## Backup status
 A run is reported as `Backup successful`, `Backup completed with warnings` (restic saved the snapshot but could not read some files, e.g. mail files moved during the backup) or `BACKUP FAILED!`. Resticara exits with a non-zero code on failure, so systemd marks the unit as failed.
 
+Every report starts with one line per job (`OK`, `WARNING` or `FAILED`, and how long the job took), followed by the restic output. The email subject and the first line of Matrix and Telegram messages name the host and the jobs that need attention, for example `[server-1] BACKUP FAILED: mysql:website`.
+
+To get notifications only when something needs attention, set `notify = problems` in `[general]`; successful runs are then only logged to syslog. The default is `notify = always`.
+
+Customized templates keep working. Besides the existing fields, templates can use `.Subject`, `.Status` (`success`, `warning` or `failure`) and, per entry of `.Commands`, `.Status`, `.StatusLabel` and `.Duration`.
+
 ## Pruning repositories
 Use the prune command to remove unneeded data from configured restic repositories.
 

@@ -32,44 +32,80 @@ const (
 )
 
 // Report is the data passed to the templates. Field names are part of the template
-// interface: customized templates in /etc/resticara/templates rely on them.
+// interface: customized templates in /etc/resticara/templates rely on them, so
+// fields are only ever added.
 type Report struct {
-	HostID        string
-	Date          string
-	Commands      []CommandInfo
+	// Kind names the run, for example "Backup".
+	Kind   string
+	HostID string
+	Date   string
+	// Status is "success", "warning" or "failure".
+	Status string
+	// StatusMessage is StatusSuccess, StatusWarning or StatusFailure.
 	StatusMessage string
+	// Subject names the host and the jobs that need attention, for example
+	// "[server-1] BACKUP FAILED: mysql:website".
+	Subject  string
+	Commands []CommandInfo
 }
 
 type CommandInfo struct {
-	CommandKey   string
+	CommandKey string
+	// Status is "success", "warning" or "failure"; StatusLabel is "OK", "WARNING" or "FAILED".
+	Status      string
+	StatusLabel string
+	// Duration is how long the job took, rounded to seconds, for example "1m23s".
+	Duration     string
 	BackupCmd    string
 	BackupOutput string
 	ForgetCmd    string
 	ForgetOutput string
 }
 
+var statusLabels = map[backup.Status]string{
+	backup.Success: "OK",
+	backup.Warning: "WARNING",
+	backup.Failure: "FAILED",
+}
+
 // New builds the report for a backup run that started at date.
 func New(hostID string, date time.Time, result backup.Result) Report {
 	r := Report{
+		Kind:   "Backup",
 		HostID: hostID,
 		Date:   date.Format(time.RFC1123),
+		Status: result.Status.String(),
 	}
+	var failed, warned []string
 	for _, job := range result.Jobs {
 		r.Commands = append(r.Commands, CommandInfo{
 			CommandKey:   job.Key,
+			Status:       job.Status.String(),
+			StatusLabel:  statusLabels[job.Status],
+			Duration:     job.Duration.Round(time.Second).String(),
 			BackupCmd:    job.BackupCmd,
 			BackupOutput: job.BackupOutput,
 			ForgetCmd:    job.ForgetCmd,
 			ForgetOutput: job.ForgetOutput,
 		})
+		switch job.Status {
+		case backup.Failure:
+			failed = append(failed, job.Key)
+		case backup.Warning:
+			warned = append(warned, job.Key)
+		}
 	}
+
 	switch result.Status {
 	case backup.Success:
 		r.StatusMessage = StatusSuccess
+		r.Subject = fmt.Sprintf("[%s] Backup successful", hostID)
 	case backup.Warning:
 		r.StatusMessage = StatusWarning
+		r.Subject = fmt.Sprintf("[%s] Backup completed with warnings: %s", hostID, strings.Join(warned, ", "))
 	default:
 		r.StatusMessage = StatusFailure
+		r.Subject = fmt.Sprintf("[%s] BACKUP FAILED: %s", hostID, strings.Join(failed, ", "))
 	}
 	return r
 }
@@ -84,6 +120,9 @@ func Log(logger Logger, r Report) {
 	logger.Notice(fmt.Sprintf("Host ID: %s", r.HostID))
 	logger.Notice(fmt.Sprintf("Date: %s", r.Date))
 	logger.Notice(fmt.Sprintf("Status: %s", r.StatusMessage))
+	for _, cmd := range r.Commands {
+		logger.Notice(fmt.Sprintf("Job %s: %s (%s)", cmd.CommandKey, cmd.StatusLabel, cmd.Duration))
+	}
 
 	for _, cmd := range r.Commands {
 		logger.Notice(fmt.Sprintf("Command Key: %s", cmd.CommandKey))
@@ -109,6 +148,9 @@ func Print(w io.Writer, r Report) {
 	}
 	fmt.Fprintf(w, bold+"Status:"+reset+" %s%s%s\n", statusColor, r.StatusMessage, reset)
 	for _, cmd := range r.Commands {
+		fmt.Fprintf(w, "  %s%-7s%s %s (%s)\n", labelColor(cmd.Status), cmd.StatusLabel, reset, cmd.CommandKey, cmd.Duration)
+	}
+	for _, cmd := range r.Commands {
 		fmt.Fprintf(w, bold+"Command Key:"+reset+" %s\n", cmd.CommandKey)
 		fmt.Fprintf(w, "  "+bold+"Backup Command:"+reset+" %s\n", cmd.BackupCmd)
 		fmt.Fprintf(w, "  "+bold+"Backup Output:"+reset+" %s\n", strings.TrimSpace(cmd.BackupOutput))
@@ -116,6 +158,16 @@ func Print(w io.Writer, r Report) {
 		fmt.Fprintf(w, "  "+bold+"Forget Output:"+reset+" %s\n", strings.TrimSpace(cmd.ForgetOutput))
 	}
 	fmt.Fprintln(w, "---------------")
+}
+
+func labelColor(status string) string {
+	switch status {
+	case "success":
+		return green
+	case "warning":
+		return yellow
+	}
+	return red
 }
 
 // TemplateLocations returns where a template is looked up, in order: relative to the

@@ -185,6 +185,10 @@ func runBackup(cfg config.Config, configPath, customTemplate string, args []stri
 	report.Log(logwriter, rep)
 	report.Print(os.Stdout, rep)
 
+	if cfg.General.Notify == config.NotifyProblems && result.Status == backup.Success {
+		fmt.Println("Backup successful, not sending notifications (notify = problems).")
+		return exitCode
+	}
 	if !notify.Default().Send(cfg, rep, messages, os.Stdout) {
 		exitCode = 1
 	}
