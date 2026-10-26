@@ -13,7 +13,7 @@ Resticara is a wrapper around [Restic](https://restic.net/), designed to simplif
 * Email Notifications: Can be configured to send emails upon backup completion or failure.
 * Matrix Notifications: Send backup status messages to a Matrix room.
 * Telegram Notifications: Send backup status messages to a Telegram chat via bot.
-* Single Binary: Written in Go, Resticara is distributed as a single binary—making it extremely easy to deploy.
+* Single Binary: Written in Go, Resticara is distributed as a single binary, making it extremely easy to deploy.
  * Systemd Timer Generation: Create and activate systemd timers with `resticara gentimer`.
 
 ## Installation [WIP]
@@ -21,6 +21,21 @@ You can download the latest version of Resticara from the [Releases](https://git
 
 ## Configuration
 The configuration is done through `config.ini` file placed in `/etc/resticara/` . Check out the `config.ini-dist` file in the repository for an example configuration.
+
+## Requirements
+Restic 0.17 or newer is required (MySQL backups use `--stdin-from-command`, so a failed `mysqldump` fails the backup instead of storing a truncated dump).
+
+## Restic credentials
+The repository password and storage credentials are read from the environment. For the systemd timers, put them in `restic.env` next to `config.ini` (e.g. `/etc/resticara/restic.env`), readable only by root:
+
+```
+RESTIC_PASSWORD=...
+B2_ACCOUNT_ID=...
+B2_ACCOUNT_KEY=...
+```
+
+## Backup status
+A run is reported as `Backup successful`, `Backup completed with warnings` (restic saved the snapshot but could not read some files, e.g. mail files moved during the backup) or `BACKUP FAILED!`. Resticara exits with a non-zero code on failure, so systemd marks the unit as failed.
 
 ## Pruning repositories
 Use the prune command to remove unneeded data from configured restic repositories.
@@ -31,7 +46,7 @@ resticara prune b2:bucket:wpsites/    # prune a single repository
 ```
 
 ## Generating systemd timers
-Run `resticara gentimer` to generate systemd service and timer files for each configured backup, writing them to the systemd unit directory. Existing timers are restarted to pick up changes and any timers without a matching configuration are disabled and removed. Prune timers run every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
+Run `resticara gentimer` as root to generate systemd service and timer files that run the `resticara` binary used for the command, writing them to the systemd unit directory. A single daily `resticara-backup.timer` runs all configured backups one after another and sends one report, and each backup gets a prune timer. Existing timers are restarted to pick up changes and any timers without a matching configuration are disabled and removed. Prune timers first run an hour after they are started and then every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
 
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.
@@ -45,7 +60,13 @@ Run `resticara gentimer` to generate systemd service and timer files for each co
 Resticara logs all its activities to syslog by default, so you can easily monitor its actions and diagnose any potential issues.
 
 ## Email Notifications
-To set up email notifications, edit the corresponding fields in the `config.ini` file.
+To set up email notifications, edit the corresponding fields in the `config.ini` file. Port 587 uses STARTTLS, port 465 implicit TLS.
+
+## Matrix and Telegram Notifications
+Matrix can log in with `username`/`pass` (the session is logged out after each message) or use an `access_token`. Telegram reports longer than Telegram's 4096 character limit are sent as truncated plain text.
+
+## Packages
+The `.deb` and `.rpm` packages install `/etc/resticara/config.ini` readable only by root and treat it and the templates as configuration files, so upgrades keep local changes. Resticara warns when `config.ini` or `restic.env` can be read by other users.
 
 ## Contributing
 Contributions are welcome! Feel free to open an issue or create a pull request.
