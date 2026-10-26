@@ -37,6 +37,11 @@ enabled = false
 ;bot_token = "123456:ABCDEF"
 ;chat_id = 123456789
 
+[healthcheck]
+;; Healthchecks ping URLs, to get alerts when backups fail or stop running
+;url = https://hc-ping.com/<uuid>
+;prune_url = https://hc-ping.com/<uuid>
+
 [dir:website]
 bucket = b2:bucket:wpsites/
 ; one line per directory

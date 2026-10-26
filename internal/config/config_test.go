@@ -465,3 +465,28 @@ func TestLoadNotify(t *testing.T) {
 		t.Errorf("error = %v", err)
 	}
 }
+
+func TestLoadHealthcheck(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+[smtp]
+enabled = false
+
+[healthcheck]
+url = https://hc-ping.com/5bf66975-d4c7-4bf5-bcc8-b8d8a82ea278
+prune_url = https://healthchecks.example.com/ping/key/prune?create=1
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Healthcheck{URL: "https://hc-ping.com/5bf66975-d4c7-4bf5-bcc8-b8d8a82ea278", PruneURL: "https://healthchecks.example.com/ping/key/prune?create=1"}
+	if cfg.Healthcheck != want || len(cfg.Warnings) != 0 {
+		t.Errorf("Healthcheck = %+v, warnings %q", cfg.Healthcheck, cfg.Warnings)
+	}
+
+	_, err = Load(writeConfig(t, "[healthcheck]\nurl = ftp://example.com/x\nprune_url = https://\n"))
+	want2 := `'url' in [healthcheck] must be an http or https URL, got "ftp://example.com/x"
+'prune_url' in [healthcheck] must be an http or https URL, got "https://"`
+	if err == nil || err.Error() != want2 {
+		t.Errorf("error:\n%v", err)
+	}
+}
