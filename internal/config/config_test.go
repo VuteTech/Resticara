@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -77,7 +79,7 @@ anything = goes
 	}
 
 	want := []Job{
-		{Key: "dir:site", Type: JobDir, Name: "site", Repository: "b2:bucket:website/", Directory: "/var/www/site", Retention: Retention{4, 5, 6}, PruneDays: 21},
+		{Key: "dir:site", Type: JobDir, Name: "site", Repository: "b2:bucket:website/", Directories: []string{"/var/www/site"}, Retention: Retention{4, 5, 6}, PruneDays: 21},
 		{Key: "mysql:site", Type: JobMySQL, Name: "site", Repository: "b2:bucket:mysql/", Database: "site_db", Retention: Retention{2, 7, 3}, PruneDays: 14},
 	}
 	if !reflect.DeepEqual(cfg.Jobs, want) {
@@ -171,5 +173,174 @@ func TestPermissionWarning(t *testing.T) {
 	}
 	if w := PermissionWarning(filepath.Join(t.TempDir(), "missing")); w != "" {
 		t.Errorf("warning for a missing file: %q", w)
+	}
+}
+
+func TestLoadDirectoriesAndMysqldumpArgs(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+[dir:site]
+bucket = /repo
+directory = /var/www/site
+directory = /etc/nginx
+directory = /srv/My Files
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+
+[mysql:all]
+bucket = /repo-db
+database = --all-databases
+mysqldump_args = --routines   --events
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Jobs[0].Directories; !reflect.DeepEqual(got, []string{"/var/www/site", "/etc/nginx", "/srv/My Files"}) {
+		t.Errorf("Directories = %q", got)
+	}
+	if job := cfg.Jobs[1]; job.Database != "--all-databases" || !reflect.DeepEqual(job.MysqldumpArgs, []string{"--routines", "--events"}) {
+		t.Errorf("mysql job = %+v", job)
+	}
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "email is enabled by default") {
+		t.Errorf("Warnings = %q", cfg.Warnings)
+	}
+}
+
+// TestLoadReportsAllProblems checks that every problem is reported at once, not only the first.
+func TestLoadReportsAllProblems(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+[general]
+retention_prune = 0
+
+[smtp]
+enabled = maybe
+
+[telegram]
+chat_id = @channel
+
+[dir:nothing]
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+
+[dir:twice]
+bucket = /repo-a
+bucket = /repo-b
+directory = /data
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+
+[mysql:nodb]
+bucket = /repo
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+
+[dir:]
+bucket = /repo
+`))
+	var cfgErr *Error
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error = %v, want *Error", err)
+	}
+	want := []string{
+		"'retention_prune' for [general] must be at least 1",
+		`'enabled' in [smtp] must be true or false, got "maybe"`,
+		"'chat_id' in [telegram] must be an integer",
+		"'bucket' is required for dir:nothing",
+		"'directory' is required for dir:nothing",
+		"'bucket' is set more than once in [dir:twice]",
+		"'database' is required for mysql:nodb",
+		"section [dir:] must be named type:name, for example [dir:website]",
+	}
+	for _, problem := range want {
+		found := false
+		for _, got := range cfgErr.Problems {
+			found = found || got == problem
+		}
+		if !found {
+			t.Errorf("missing problem %q in:\n%s", problem, err)
+		}
+	}
+	if len(cfgErr.Problems) != len(want) {
+		t.Errorf("got %d problems, want %d:\n%s", len(cfgErr.Problems), len(want), err)
+	}
+}
+
+func TestLoadWarnings(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+stray = 1
+
+[general]
+hostID = first
+hostID = second
+
+[smtp]
+enabled = true
+server = mail.example.com
+
+[matrix]
+enabled = yes
+server = https://matrix.example.com
+username = bot
+
+[telegram]
+enabled = on
+
+[notes]
+text = hello
+
+[dir:site]
+bucket = /repo
+directory = /data
+retention_daily = 1
+retention_dialy = 2
+retention_weekly = 1
+retention_monthly = 1
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"'hostID' is set more than once in [general]; the last value is used",
+		"[smtp] is enabled but 'port', 'from', 'to' not set, so email cannot be sent",
+		"[matrix] is enabled but 'room_id', 'access_token' (or 'username' and 'pass') not set, so Matrix messages cannot be sent",
+		"[telegram] is enabled but 'bot_token', 'chat_id' not set, so Telegram messages cannot be sent",
+		"key 'stray' is outside of any section and is ignored",
+		"section [notes] is not used",
+		"unknown key 'retention_dialy' in [dir:site] is ignored",
+	}
+	if strings.Join(cfg.Warnings, "\n") != strings.Join(want, "\n") {
+		t.Errorf("warnings:\n%s\nwant:\n%s", strings.Join(cfg.Warnings, "\n"), strings.Join(want, "\n"))
+	}
+	// the last value wins outside job sections, like before
+	if cfg.General.HostID != "second" || !cfg.Matrix.Enabled || !cfg.Telegram.Enabled {
+		t.Errorf("General = %+v, matrix %v, telegram %v", cfg.General, cfg.Matrix.Enabled, cfg.Telegram.Enabled)
+	}
+}
+
+func TestPathWarnings(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	for _, d := range []string{a, b} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := Config{Jobs: []Job{
+		{Key: "dir:ok", Type: JobDir, Directories: []string{a, b}},
+		{Key: "dir:typo", Type: JobDir, Directories: []string{filepath.Join(dir, "missing")}},
+		{Key: "dir:list", Type: JobDir, Directories: []string{a + " " + b}},
+	}}
+	want := []string{
+		fmt.Sprintf("directory %q of dir:typo does not exist", filepath.Join(dir, "missing")),
+		fmt.Sprintf("directory %q of dir:list does not exist; to back up several directories, put each on its own 'directory =' line", a+" "+b),
+	}
+	if got := cfg.PathWarnings(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("PathWarnings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

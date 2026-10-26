@@ -16,7 +16,8 @@ type fakeRunner struct {
 	ran     []string
 }
 
-func (f *fakeRunner) Run(command string) restic.Result {
+func (f *fakeRunner) Run(cmd restic.Command) restic.Result {
+	command := cmd.String()
 	f.ran = append(f.ran, command)
 	for match, res := range f.results {
 		if strings.Contains(command, match) {
@@ -27,8 +28,8 @@ func (f *fakeRunner) Run(command string) restic.Result {
 }
 
 var jobs = []config.Job{
-	{Key: "dir:a", Type: config.JobDir, Repository: "/repo-a", Directory: "/a"},
-	{Key: "dir:b", Type: config.JobDir, Repository: "/repo-b", Directory: "/b"},
+	{Key: "dir:a", Type: config.JobDir, Repository: "/repo-a", Directories: []string{"/a"}},
+	{Key: "dir:b", Type: config.JobDir, Repository: "/repo-b", Directories: []string{"/b"}},
 }
 
 func TestRunStatus(t *testing.T) {

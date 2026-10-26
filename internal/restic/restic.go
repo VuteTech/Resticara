@@ -3,8 +3,8 @@ package restic
 
 import (
 	"bytes"
-	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"resticara/internal/config"
@@ -15,29 +15,66 @@ const (
 	// source files could not be read.
 	ExitIncomplete = 3
 
-	retryLock = "--retry-lock 30m"
+	retryLock = "30m"
 )
 
+// Command is a program and its arguments. Arguments are passed as they are; no shell
+// is involved, so they may contain spaces.
+type Command []string
+
+// String returns the command as it would be typed in a shell, quoting arguments
+// that contain spaces or other special characters.
+func (c Command) String() string {
+	quoted := make([]string, len(c))
+	for i, arg := range c {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(arg string) string {
+	if arg == "" {
+		return "''"
+	}
+	for _, r := range arg {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("@%+=:,./_-", r)) {
+			return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+		}
+	}
+	return arg
+}
+
+func base(repository string) Command {
+	return Command{"restic", "-r", repository, "--retry-lock", retryLock}
+}
+
 // BackupCommand returns the restic backup command for a job.
-func BackupCommand(job config.Job) string {
+func BackupCommand(job config.Job) Command {
+	cmd := base(job.Repository)
 	switch job.Type {
 	case config.JobDir:
-		return fmt.Sprintf("restic -r %s %s backup %s", job.Repository, retryLock, job.Directory)
+		cmd = append(cmd, "backup")
+		cmd = append(cmd, job.Directories...)
 	case config.JobMySQL:
 		// restic runs mysqldump itself, so a failed dump fails the backup instead of storing a truncated snapshot
-		return fmt.Sprintf("restic -r %s %s backup --stdin-filename %s.sql --stdin-from-command -- mysqldump --single-transaction %s", job.Repository, retryLock, job.Database, job.Database)
+		cmd = append(cmd, "backup", "--stdin-filename", job.Database+".sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction")
+		cmd = append(cmd, job.MysqldumpArgs...)
+		cmd = append(cmd, strings.Fields(job.Database)...)
 	}
-	return ""
+	return cmd
 }
 
 // ForgetCommand returns the restic command that applies the job's retention policy.
-func ForgetCommand(job config.Job) string {
-	return fmt.Sprintf("restic -r %s %s forget --keep-daily %d --keep-weekly %d --keep-monthly %d", job.Repository, retryLock, job.Retention.Daily, job.Retention.Weekly, job.Retention.Monthly)
+func ForgetCommand(job config.Job) Command {
+	return append(base(job.Repository), "forget",
+		"--keep-daily", strconv.Itoa(job.Retention.Daily),
+		"--keep-weekly", strconv.Itoa(job.Retention.Weekly),
+		"--keep-monthly", strconv.Itoa(job.Retention.Monthly))
 }
 
 // PruneCommand returns the restic command that removes unreferenced data from a repository.
-func PruneCommand(repository string) string {
-	return fmt.Sprintf("restic -r %s %s prune", repository, retryLock)
+func PruneCommand(repository string) Command {
+	return append(base(repository), "prune")
 }
 
 // Result is the outcome of a command. ExitCode is -1 when the command could not be started.
@@ -49,21 +86,20 @@ type Result struct {
 
 // Runner runs commands.
 type Runner interface {
-	Run(command string) Result
+	Run(cmd Command) Result
 }
 
-// ExecRunner runs commands as processes. The command is split on whitespace; no shell is involved.
+// ExecRunner runs commands as processes.
 type ExecRunner struct{}
 
-func (ExecRunner) Run(command string) Result {
+func (ExecRunner) Run(c Command) Result {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
+	if len(c) == 0 {
 		return Result{ExitCode: -1, Stderr: "empty command"}
 	}
 
-	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd := exec.Command(c[0], c[1:]...)
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
