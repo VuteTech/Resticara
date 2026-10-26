@@ -1,0 +1,10 @@
+[Unit]
+Description=Resticara prune timer for dir:website
+
+[Timer]
+OnActiveSec=1h
+OnUnitActiveSec=21d
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
