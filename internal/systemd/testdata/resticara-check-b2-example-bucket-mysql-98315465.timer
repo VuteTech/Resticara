@@ -1,0 +1,10 @@
+[Unit]
+Description=Resticara check timer for b2:example-bucket:mysql/
+
+[Timer]
+OnActiveSec=6h
+OnUnitActiveSec=30d
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
