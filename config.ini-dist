@@ -2,7 +2,9 @@
 ; put them in restic.env next to this file, it is loaded by the units created with `resticara gentimer`.
 
 [general]
-; if hostID=hostname, the actual hostname of the machine will be shown
+; if hostID=hostname, the actual hostname of the machine will be shown.
+; Any other name is also passed to restic as --host, so retention only removes
+; this host's snapshots (see the README before changing it on an existing setup).
 hostID=hostname
 retention_prune = 14
 ;; excludes in [general] apply to every dir job

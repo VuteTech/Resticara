@@ -4,6 +4,8 @@ package restic
 import (
 	"bytes"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -48,17 +50,18 @@ func base(repository string) Command {
 	return Command{"restic", "-r", repository, "--retry-lock", retryLock}
 }
 
-// BackupCommand returns the restic backup command for a job.
-func BackupCommand(job config.Job) Command {
-	cmd := base(job.Repository)
+// BackupCommand returns the restic backup command for a job. A non-empty host is
+// stored in the snapshot instead of the machine's hostname.
+func BackupCommand(job config.Job, host string) Command {
+	cmd := append(base(job.Repository), "backup")
+	cmd = append(cmd, hostArgs(host)...)
 	switch job.Type {
 	case config.JobDir:
-		cmd = append(cmd, "backup")
 		cmd = append(cmd, excludeArgs(job.Exclude)...)
 		cmd = append(cmd, job.Directories...)
 	case config.JobMySQL:
 		// restic runs mysqldump itself, so a failed dump fails the backup instead of storing a truncated snapshot
-		cmd = append(cmd, "backup", "--stdin-filename", job.Database+".sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction")
+		cmd = append(cmd, "--stdin-filename", job.Database+".sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction")
 		cmd = append(cmd, job.MysqldumpArgs...)
 		cmd = append(cmd, strings.Fields(job.Database)...)
 	}
@@ -84,12 +87,44 @@ func excludeArgs(ex config.Exclude) []string {
 	return args
 }
 
+func hostArgs(host string) []string {
+	if host == "" {
+		return nil
+	}
+	return []string{"--host", host}
+}
+
 // ForgetCommand returns the restic command that applies the job's retention policy.
-func ForgetCommand(job config.Job) Command {
-	return append(base(job.Repository), "forget",
+// A non-empty host limits it to that host's snapshots, so other machines sharing
+// the repository keep theirs.
+func ForgetCommand(job config.Job, host string) Command {
+	cmd := append(base(job.Repository), "forget")
+	cmd = append(cmd, hostArgs(host)...)
+	return append(cmd,
 		"--keep-daily", strconv.Itoa(job.Retention.Daily),
 		"--keep-weekly", strconv.Itoa(job.Retention.Weekly),
 		"--keep-monthly", strconv.Itoa(job.Retention.Monthly))
+}
+
+// SnapshotsCommand lists the snapshots of a repository as JSON.
+func SnapshotsCommand(repository string) Command {
+	return append(base(repository), "snapshots", "--json")
+}
+
+// SnapshotPaths returns the paths restic records in the job's snapshots: the
+// absolute directories, or "/<database>.sql" for a dump.
+func SnapshotPaths(job config.Job) []string {
+	if job.Type == config.JobMySQL {
+		return []string{"/" + job.Database + ".sql"}
+	}
+	var paths []string
+	for _, dir := range job.Directories {
+		if abs, err := filepath.Abs(dir); err == nil {
+			paths = append(paths, abs)
+		}
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // PruneCommand returns the restic command that removes unreferenced data from a repository.

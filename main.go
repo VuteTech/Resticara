@@ -165,7 +165,12 @@ func runBackup(cfg config.Config, configPath, customTemplate string, args []stri
 		fmt.Println("Warning: " + warning)
 	}
 
-	result := backup.Run(restic.ExecRunner{}, jobs, os.Stdout)
+	// restic records the machine's hostname unless hostID names the host explicitly
+	resticHost := ""
+	if cfg.General.HostID != "hostname" {
+		resticHost = cfg.General.HostID
+	}
+	result := backup.Run(restic.ExecRunner{}, jobs, resticHost, os.Stdout)
 	rep := report.New(hostID, started, result)
 	exitCode := 0
 	if result.Status == backup.Failure {
