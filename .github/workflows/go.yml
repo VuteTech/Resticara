@@ -13,8 +13,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      REF_NAME: ${{ github.ref_name }}
+      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
     steps:
     - uses: actions/checkout@v7
+      with:
+        # git describe needs the tags for the version of untagged builds
+        fetch-depth: 0
 
     - name: Setup Go
       uses: actions/setup-go@v7
@@ -25,19 +31,40 @@ jobs:
     - name: Vet
       run: go vet ./...
 
-    - name: Build
-      env:
-        CGO_ENABLED: 0
-      run: go build -v -o resticara
-
     - name: Run Tests
       run: go test -v ./...
 
-    - name: Upload binary build artifact
+    - name: Set version
+      run: |
+        # tags: v1.2.3 gives 1.2.3; other builds: 1.2.3+15.gabc1234 (15 commits after v1.2.3),
+        # which sorts after the release in dpkg and rpm
+        if [[ "$IS_TAG" == "true" ]]; then
+          VERSION="${REF_NAME#v}"
+          LABEL="$REF_NAME"
+        else
+          VERSION="$(git describe --tags --abbrev=7 | sed -E 's/^v//; s/-([0-9]+)-g([0-9a-f]+)$/+\1.g\2/')"
+          LABEL="$VERSION"
+        fi
+        mkdir -p dist
+        echo "$VERSION" > dist/VERSION
+        echo "$LABEL" > dist/LABEL
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+    - name: Build
+      env:
+        CGO_ENABLED: 0
+        GOOS: linux
+      run: |
+        for arch in amd64 arm64 ppc64le; do
+          GOARCH=$arch go build -v -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "dist/resticara-linux-$arch" .
+        done
+        dist/resticara-linux-amd64 --version
+
+    - name: Upload binaries
       uses: actions/upload-artifact@v7
       with:
-        name: resticara-artifacts
-        path: resticara
+        name: binaries
+        path: dist/
 
   lint:
     runs-on: ubuntu-latest
@@ -90,104 +117,60 @@ jobs:
   package:
     needs: [build, lint, integration]
     runs-on: ubuntu-latest
-    env:
-      REF_NAME: ${{ github.ref_name }}
-      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
-      RUN_NUMBER: ${{ github.run_number }}
     steps:
     - uses: actions/checkout@v7
     - uses: actions/download-artifact@v8
       with:
-        name: resticara-artifacts
+        name: binaries
+        path: dist
 
-    - name: Install packaging tools
-      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev rpm zip
+    - name: Setup Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: stable
 
-    - name: Set version
+    - name: Install nfpm
+      # pinned on purpose; update it like the golangci-lint version
+      run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+
+    - name: Build packages and archives
       run: |
-        if [[ "$IS_TAG" == "true" ]]; then
-          echo "VERSION=${REF_NAME#v}" >> "$GITHUB_ENV"
-          echo "LABEL=$REF_NAME" >> "$GITHUB_ENV"
-        else
-          echo "VERSION=0.1+$RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "LABEL=0.1+$RUN_NUMBER" >> "$GITHUB_ENV"
-        fi
-        chmod +x resticara
+        VERSION="$(cat dist/VERSION)"
+        LABEL="$(cat dist/LABEL)"
+        mkdir -p build release
+        # file names use the rpm architecture names; nfpm sets each format's own
+        # architecture inside the package (amd64, arm64 and ppc64el for deb)
+        for arch in amd64 arm64 ppc64le; do
+          case "$arch" in
+            amd64) name=x86_64 ;;
+            arm64) name=aarch64 ;;
+            ppc64le) name=ppc64le ;;
+          esac
+          install -m 0755 "dist/resticara-linux-$arch" build/resticara
+          GOARCH=$arch VERSION=$VERSION nfpm package --packager deb --target "release/resticara-$LABEL.$name.deb"
+          GOARCH=$arch VERSION=$VERSION nfpm package --packager rpm --target "release/resticara-$LABEL.$name.rpm"
 
-    - name: Build DEB package
-      run: |
-        mkdir -p debian/DEBIAN debian/usr/local/bin debian/etc/resticara/templates
-        install -m 0755 resticara debian/usr/local/bin/resticara
-        # the config holds credentials
-        install -m 0600 config.ini-dist debian/etc/resticara/config.ini
-        install -m 0644 templates/* debian/etc/resticara/templates/
-        cat > debian/DEBIAN/control <<EOF
-        Package: resticara
-        Version: $VERSION
-        Architecture: amd64
-        Maintainer: Blagovest Petrov <blago.petrov@vute.tech>
-        Recommends: restic (>= 0.17)
-        Description: Wrapper of Restic for simplified configuration and deployment.
-        EOF
-        # mark files in /etc as conffiles so upgrades don't overwrite local configuration
-        (cd debian && find etc -type f | sed 's|^|/|') > debian/DEBIAN/conffiles
-        dpkg-deb --root-owner-group --build debian "resticara-$LABEL.deb"
+          dir="resticara-$LABEL-linux-$arch"
+          mkdir "$dir"
+          install -m 0755 build/resticara "$dir/resticara"
+          install -m 0600 config.ini-dist "$dir/config.ini"
+          cp -r templates README.md LICENSE "$dir/"
+          tar czf "release/resticara-$LABEL.Linux-$name.tar.gz" "$dir"
+        done
 
-    - name: Build RPM package
-      run: |
-        mkdir -p ~/rpmbuild/SOURCES/templates ~/rpmbuild/SPECS
-        cp resticara config.ini-dist ~/rpmbuild/SOURCES/
-        cp templates/* ~/rpmbuild/SOURCES/templates/
-        cat > ~/rpmbuild/SPECS/resticara.spec <<EOF
-        Summary: Wrapper of Restic for simplified configuration and deployment.
-        Name: resticara
-        Version: $VERSION
-        Release: 1
-        License: GPLv3
+        # the zip of earlier releases, x86_64 only; superseded by the tar.gz archives
+        cp -r "resticara-$LABEL-linux-amd64" "resticara-$LABEL"
+        zip -qr "release/resticara-$LABEL.Linux-x86_64.zip" "resticara-$LABEL"
 
-        %description
-        Wrapper of Restic for simplified configuration and deployment.
+        cd release
+        sha256sum * > SHA256SUMS
+        cat SHA256SUMS
 
-        %install
-        mkdir -p %{buildroot}/usr/bin %{buildroot}/etc/resticara/templates
-        install -m 0755 %{_sourcedir}/resticara %{buildroot}/usr/bin/resticara
-        install -m 0600 %{_sourcedir}/config.ini-dist %{buildroot}/etc/resticara/config.ini
-        install -m 0644 %{_sourcedir}/templates/* %{buildroot}/etc/resticara/templates/
-
-        %files
-        /usr/bin/resticara
-        %dir /etc/resticara
-        %dir /etc/resticara/templates
-        %config(noreplace) %attr(0600,root,root) /etc/resticara/config.ini
-        %config(noreplace) /etc/resticara/templates/*
-        EOF
-        rpmbuild -ba ~/rpmbuild/SPECS/resticara.spec
-
-    - name: Build zip file
-      run: |
-        mkdir -p "resticara-$LABEL"
-        install -m 0755 resticara "resticara-$LABEL/resticara"
-        install -m 0600 config.ini-dist "resticara-$LABEL/config.ini"
-        cp -r templates/ "resticara-$LABEL"
-        zip -r "resticara-$LABEL.zip" "resticara-$LABEL"
-
-    - name: Upload DEB package artifact
+    - name: Upload release files
       uses: actions/upload-artifact@v7
       with:
-        name: deb-package
-        path: '*.deb'
-
-    - name: Upload RPM package artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: rpm-package
-        path: ~/rpmbuild/RPMS/**/*.rpm
-
-    - name: Upload ZIP archive artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: zip-archive
-        path: '*.zip'
+        name: release
+        path: release/
 
   release:
     needs: package
@@ -197,29 +180,18 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
-    - name: Download DEB package artifact
+    - name: Download release files
       uses: actions/download-artifact@v8
       with:
-        name: deb-package
-
-    - name: Download RPM package artifact
-      uses: actions/download-artifact@v8
-      with:
-        name: rpm-package
-
-    - name: Download ZIP archive artifact
-      uses: actions/download-artifact@v8
-      with:
-        name: zip-archive
+        name: release
+        path: release
 
     - name: Create GitHub Release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         TAG: ${{ github.ref_name }}
         REPO: ${{ github.repository }}
+      working-directory: release
       run: |
-        mv "resticara-$TAG.deb" "resticara-$TAG.x86_64.deb"
-        mv "$(find . -name '*.rpm' | head -n 1)" "resticara-$TAG.x86_64.rpm"
-        mv "resticara-$TAG.zip" "resticara-$TAG.Linux-x86_64.zip"
-        gh release create "$TAG" --repo "$REPO" --title "Release $TAG" --notes "Resticara release" \
-          "resticara-$TAG.x86_64.deb" "resticara-$TAG.x86_64.rpm" "resticara-$TAG.Linux-x86_64.zip"
+        sha256sum --check SHA256SUMS
+        gh release create "$TAG" --repo "$REPO" --title "Release $TAG" --generate-notes ./*

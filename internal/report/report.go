@@ -47,6 +47,8 @@ type Report struct {
 	// "[server-1] BACKUP FAILED: mysql:website".
 	Subject  string
 	Commands []CommandInfo
+	// Version is the resticara version that made the report.
+	Version string
 }
 
 type CommandInfo struct {

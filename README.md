@@ -16,8 +16,21 @@ Resticara is a wrapper around [Restic](https://restic.net/), designed to simplif
 * Single Binary: Written in Go, Resticara is distributed as a single binary, making it extremely easy to deploy.
  * Systemd Timer Generation: Create and activate systemd timers with `resticara gentimer`.
 
-## Installation [WIP]
-You can download the latest version of Resticara from the [Releases](https://github.com/VuteTech/Resticara/releases) page. Available as a `zip` file, `deb` or `rpm` packages for easy installation on various systems.
+## Installation
+Download the latest version from the [Releases](https://github.com/VuteTech/Resticara/releases) page. Every release has `deb` and `rpm` packages and `.tar.gz` archives for `x86_64`, `aarch64` and `ppc64le`, and a `SHA256SUMS` file to verify the downloads:
+
+```
+sha256sum --check --ignore-missing SHA256SUMS
+sudo apt install ./resticara-<version>.x86_64.deb      # Debian, Ubuntu
+sudo dnf install ./resticara-<version>.x86_64.rpm      # Fedora, RHEL
+```
+
+The packages install the binary as `/usr/bin/resticara`, an example configuration as `/etc/resticara/config.ini` (readable only by root) and the templates in `/etc/resticara/templates/`, and recommend restic 0.17 or newer. Configuration files you changed are kept on upgrades. The archives contain the binary, an example `config.ini` and the templates. The `zip` archive of earlier releases is still published for `x86_64`, but will be dropped in a later release.
+
+`resticara --version` prints the installed version.
+
+### Upgrading from 0.2 or older
+Older `deb` packages installed the binary as `/usr/local/bin/resticara` and did not mark the configuration as such. The new package keeps your `config.ini` and any templates you changed (the new templates are in `/usr/share/doc/resticara/templates/`), replaces templates you did not change, and leaves a link at `/usr/local/bin/resticara`, so existing timers keep working. Run `resticara gentimer` after the upgrade to update the timers to the new path and layout. With older `rpm` packages, your `config.ini` is kept and the new example is saved as `config.ini.rpmnew`.
 
 ## Configuration
 The configuration is done through `config.ini` file placed in `/etc/resticara/` . Check out the `config.ini-dist` file in the repository for an example configuration.

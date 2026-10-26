@@ -86,8 +86,12 @@ func TestLogAndPrint(t *testing.T) {
 // TestShippedTemplates renders the templates from the repository.
 func TestShippedTemplates(t *testing.T) {
 	r := New("server-1", started, sampleResult(backup.Failure))
+	r.Version = "1.2.3"
 
 	mail, err := RenderText("../../templates/mail_template.txt", "", r)
+	if err == nil && !strings.HasSuffix(mail, "\nresticara 1.2.3\n") {
+		t.Errorf("mail does not end with the version:\n%s", mail)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +104,9 @@ func TestShippedTemplates(t *testing.T) {
 		html, err := RenderHTML("../../templates/"+name, "chat", r)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !strings.Contains(html, "<i>resticara 1.2.3</i>") {
+			t.Errorf("%s has no version footer", name)
 		}
 		// command output is escaped in HTML templates
 		if !strings.Contains(html, "❌ [server-1] BACKUP FAILED: dir:site") || !strings.Contains(html, "❌ <b>dir:site</b> FAILED (1m5s)") ||
