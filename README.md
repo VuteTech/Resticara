@@ -22,6 +22,21 @@ You can download the latest version of Resticara from the [Releases](https://git
 ## Configuration
 The configuration is done through `config.ini` file placed in `/etc/resticara/` . Check out the `config.ini-dist` file in the repository for an example configuration.
 
+## Requirements
+Restic 0.17 or newer is required (MySQL backups use `--stdin-from-command`, so a failed `mysqldump` fails the backup instead of storing a truncated dump).
+
+## Restic credentials
+The repository password and storage credentials are read from the environment. For the systemd timers, put them in `restic.env` next to `config.ini` (e.g. `/etc/resticara/restic.env`), readable only by root:
+
+```
+RESTIC_PASSWORD=...
+B2_ACCOUNT_ID=...
+B2_ACCOUNT_KEY=...
+```
+
+## Backup status
+A run is reported as `Backup successful`, `Backup completed with warnings` (restic saved the snapshot but could not read some files, e.g. mail files moved during the backup) or `BACKUP FAILED!`. Resticara exits with a non-zero code on failure, so systemd marks the unit as failed.
+
 ## Pruning repositories
 Use the prune command to remove unneeded data from configured restic repositories.
 
@@ -31,7 +46,7 @@ resticara prune b2:bucket:wpsites/    # prune a single repository
 ```
 
 ## Generating systemd timers
-Run `resticara gentimer` to generate systemd service and timer files for each configured backup, writing them to the systemd unit directory. Existing timers are restarted to pick up changes and any timers without a matching configuration are disabled and removed. Prune timers run every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
+Run `resticara gentimer` to generate systemd service and timer files, writing them to the systemd unit directory. A single daily `resticara-backup.timer` runs all configured backups one after another and sends one report, and each backup gets a prune timer. Existing timers are restarted to pick up changes and any timers without a matching configuration are disabled and removed. Prune timers first run an hour after they are started and then every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
 
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.

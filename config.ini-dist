@@ -1,3 +1,6 @@
+; Restic credentials (RESTIC_PASSWORD, B2_ACCOUNT_ID, B2_ACCOUNT_KEY, ...) are not stored here:
+; put them in restic.env next to this file, it is loaded by the units created with `resticara gentimer`.
+
 [general]
 ; if hostID=hostname, the actual hostname of the machine will be shown
 hostID=hostname

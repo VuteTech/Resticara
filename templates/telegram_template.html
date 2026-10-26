@@ -1,4 +1,4 @@
-<b>{{if eq .StatusMessage "Backup successful"}}✅ Backup successful{{else}}❌ Backup failed{{end}} for {{.HostID}}</b>
+<b>{{if eq .StatusMessage "Backup successful"}}✅ Backup successful{{else if eq .StatusMessage "Backup completed with warnings"}}⚠️ Backup completed with warnings{{else}}❌ Backup failed{{end}} for {{.HostID}}</b>
 
 <i>{{.Date}}</i>
 

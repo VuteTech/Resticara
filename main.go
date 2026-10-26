@@ -19,12 +19,12 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"log/syslog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -82,6 +82,18 @@ const (
 	Bold   = "\033[1m"
 )
 
+const (
+	StatusSuccess = "Backup successful"
+	StatusWarning = "Backup completed with warnings"
+	StatusFailure = "BACKUP FAILED! See output above."
+)
+
+const (
+	// restic exits with 3 when the snapshot was created but some source files could not be read
+	resticExitIncomplete = 3
+	resticRetryLock      = "--retry-lock 30m"
+)
+
 func readConfig(file string) (Config, error) {
 	var config Config
 
@@ -125,6 +137,9 @@ func readConfig(file string) (Config, error) {
 
 		commandType := splitName[0]
 		commandName := splitName[1]
+		if commandType != "dir" && commandType != "mysql" {
+			return Config{}, fmt.Errorf("unsupported backup type %q in section [%s], expected dir or mysql", commandType, section.Name())
+		}
 		commandSettings := make(map[string]string)
 		for key, value := range section.KeysHash() {
 			commandSettings[key] = value
@@ -166,6 +181,15 @@ func searchForFile(customPath string, defaultLocations []string) string {
 	return ""
 }
 
+func templateLocations(configPath, name string) []string {
+	return []string{
+		filepath.Join("templates", name),
+		filepath.Join(filepath.Dir(configPath), "templates", name),
+		filepath.Join("/etc/resticara/templates", name),
+		filepath.Join(os.Getenv("HOME"), ".config/resticara", name),
+	}
+}
+
 func printUsage() {
 	fmt.Println("Usage of resticara:")
 	fmt.Println("  --config=       : Specify a custom config.ini file path")
@@ -194,11 +218,14 @@ func printSummary(mailData MailData, logwriter *syslog.Writer) {
 	fmt.Println("---------------")
 	fmt.Printf(Bold+"Host ID:"+Reset+" %s\n", mailData.HostID)
 	fmt.Printf(Bold+"Date:"+Reset+" %s\n", mailData.Date)
-	if mailData.StatusMessage == "Backup successful" {
-		fmt.Printf(Bold+"Status:"+Reset+" %s%s%s\n", Green, mailData.StatusMessage, Reset)
-	} else {
-		fmt.Printf(Bold+"Status:"+Reset+" %s%s%s\n", Red, mailData.StatusMessage, Reset)
+	statusColor := Red
+	switch mailData.StatusMessage {
+	case StatusSuccess:
+		statusColor = Green
+	case StatusWarning:
+		statusColor = Yellow
 	}
+	fmt.Printf(Bold+"Status:"+Reset+" %s%s%s\n", statusColor, mailData.StatusMessage, Reset)
 	for _, cmdInfo := range mailData.Commands {
 		fmt.Printf(Bold+"Command Key:"+Reset+" %s\n", cmdInfo.CommandKey)
 		fmt.Printf("  "+Bold+"Backup Command:"+Reset+" %s\n", cmdInfo.BackupCmd)
@@ -209,56 +236,43 @@ func printSummary(mailData MailData, logwriter *syslog.Writer) {
 	fmt.Println("---------------")
 }
 
-func cmdSuccess(command string) (bool, string, string) {
+// runCommand executes the command and returns its exit code (-1 if it could not be started)
+// together with the captured stdout and stderr.
+func runCommand(command string) (int, string, string) {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
-	// Special case: we have a MySQL dump piped to restic
-	if strings.HasPrefix(command, "mysqldump") {
-		parts := strings.Split(command, "|")
-		mysqldumpCmdStr := strings.TrimSpace(parts[0])
-		resticCmdStr := strings.TrimSpace(parts[1])
-
-		mysqldumpParts := strings.Fields(mysqldumpCmdStr)
-		resticParts := strings.Fields(resticCmdStr)
-
-		c1 := exec.Command(mysqldumpParts[0], mysqldumpParts[1:]...)
-		c2 := exec.Command(resticParts[0], resticParts[1:]...)
-
-		pr, pw := io.Pipe()
-		c1.Stdout = pw
-		c2.Stdin = pr
-		c2.Stdout = &stdoutBuf
-		c2.Stderr = &stderrBuf // Capture stderr as well
-
-		var err1, err2 error
-
-		c1.Start()
-		c2.Start()
-
-		go func() {
-			defer pw.Close()
-			err1 = c1.Wait()
-		}()
-
-		err2 = c2.Wait()
-		if err1 != nil || err2 != nil {
-			return false, stdoutBuf.String(), stderrBuf.String()
-		}
-
-		return true, stdoutBuf.String(), stderrBuf.String()
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return -1, "", "empty command"
 	}
 
-	// For all other commands
-	parts := strings.Fields(command)
-	head := parts[0]
-	parts = parts[1:]
-
-	cmd := exec.Command(head, parts...)
+	cmd := exec.Command(parts[0], parts[1:]...)
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf // Capture stderr as well
 	err := cmd.Run()
 
-	return err == nil, stdoutBuf.String(), stderrBuf.String()
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return exitErr.ExitCode(), stdoutBuf.String(), stderrBuf.String()
+	}
+	if err != nil {
+		return -1, stdoutBuf.String(), stderrBuf.String() + err.Error()
+	}
+	return 0, stdoutBuf.String(), stderrBuf.String()
+}
+
+// buildCommands returns the restic backup and forget commands for a configured backup.
+func buildCommands(commandKey string, settings map[string]string) (string, string) {
+	bucket := settings["bucket"]
+	var backupCmd string
+	if strings.HasPrefix(commandKey, "dir:") {
+		backupCmd = fmt.Sprintf("restic -r %s %s backup %s", bucket, resticRetryLock, settings["directory"])
+	} else if strings.HasPrefix(commandKey, "mysql:") {
+		// restic runs mysqldump itself, so a failed dump fails the backup instead of storing a truncated snapshot
+		database := settings["database"]
+		backupCmd = fmt.Sprintf("restic -r %s %s backup --stdin-filename %s.sql --stdin-from-command -- mysqldump --single-transaction %s", bucket, resticRetryLock, database, database)
+	}
+	forgetCmd := fmt.Sprintf("restic -r %s %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, resticRetryLock, settings["retention_daily"], settings["retention_weekly"], settings["retention_monthly"])
+	return backupCmd, forgetCmd
 }
 
 func sanitizeName(name string) string {
@@ -266,7 +280,19 @@ func sanitizeName(name string) string {
 	return replacer.Replace(name)
 }
 
-func generateTimers(config Config) error {
+// generateTimers writes one backup timer that runs all backups sequentially (one report per run)
+// and a prune timer per configured backup.
+func generateTimers(config Config, configPath string) error {
+	configPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return err
+	}
+	// restic credentials (RESTIC_PASSWORD, B2_ACCOUNT_ID, B2_ACCOUNT_KEY, ...) are read from this file
+	envFile := filepath.Join(filepath.Dir(configPath), "restic.env")
+	serviceEnv := fmt.Sprintf(`EnvironmentFile=-%s
+Environment=RESTIC_CACHE_DIR=/var/cache/resticara
+CacheDirectory=resticara`, envFile)
+
 	unitOut, err := exec.Command("systemctl", "show", "--property=UnitPath").Output()
 	if err != nil {
 		return fmt.Errorf("failed to retrieve systemd unit path: %v", err)
@@ -305,7 +331,7 @@ func generateTimers(config Config) error {
 		pruneDays  int
 	}
 	var units []timerUnit
-	expected := make(map[string]struct{})
+	expected := map[string]struct{}{"resticara-backup": {}}
 	for commandKey, settings := range config.Commands {
 		sanitized := sanitizeName(commandKey)
 		pruneDays := config.RetentionPrune
@@ -321,7 +347,6 @@ func generateTimers(config Config) error {
 			bucket:     bucket,
 			pruneDays:  pruneDays,
 		})
-		expected["resticara-"+sanitized] = struct{}{}
 		expected["resticara-"+sanitized+"-prune"] = struct{}{}
 	}
 
@@ -350,21 +375,22 @@ func generateTimers(config Config) error {
 		}
 	}
 
-	var timers []string
-	for _, u := range units {
-		backupService := fmt.Sprintf(`[Unit]
-Description=Resticara backup for %s
+	backupService := fmt.Sprintf(`[Unit]
+Description=Resticara backup
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/resticara run %s
+ExecStart=/usr/local/bin/resticara --config=%s run
+%s
 
 [Install]
 WantedBy=multi-user.target
-`, u.commandKey, u.commandKey)
+`, configPath, serviceEnv)
 
-		backupTimer := fmt.Sprintf(`[Unit]
-Description=Resticara backup timer for %s
+	backupTimer := `[Unit]
+Description=Resticara backup timer
 
 [Timer]
 OnCalendar=daily
@@ -372,43 +398,51 @@ Persistent=true
 
 [Install]
 WantedBy=timers.target
-`, u.commandKey)
+`
 
+	if err := os.WriteFile(filepath.Join(unitDir, "resticara-backup.service"), []byte(backupService), 0644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(unitDir, "resticara-backup.timer"), []byte(backupTimer), 0644); err != nil {
+		return err
+	}
+	timers := []string{"resticara-backup.timer"}
+
+	for _, u := range units {
 		pruneService := fmt.Sprintf(`[Unit]
 Description=Resticara prune for %s
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/resticara prune %s
+ExecStart=/usr/local/bin/resticara --config=%s prune %s
+%s
 
 [Install]
 WantedBy=multi-user.target
-`, u.commandKey, u.bucket)
+`, u.commandKey, configPath, u.bucket, serviceEnv)
 
+		// OnUnitActiveSec alone never fires because it counts from the last run of the service;
+		// OnActiveSec schedules the first run after the timer is (re)started.
 		pruneTimer := fmt.Sprintf(`[Unit]
 Description=Resticara prune timer for %s
 
 [Timer]
+OnActiveSec=1h
 OnUnitActiveSec=%dd
-Persistent=true
+RandomizedDelaySec=1h
 
 [Install]
 WantedBy=timers.target
 `, u.commandKey, u.pruneDays)
 
-		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.service", u.sanitized)), []byte(backupService), 0644); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s.timer", u.sanitized)), []byte(backupTimer), 0644); err != nil {
-			return err
-		}
 		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.service", u.sanitized)), []byte(pruneService), 0644); err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(unitDir, fmt.Sprintf("resticara-%s-prune.timer", u.sanitized)), []byte(pruneTimer), 0644); err != nil {
 			return err
 		}
-		timers = append(timers, fmt.Sprintf("resticara-%s.timer", u.sanitized))
 		timers = append(timers, fmt.Sprintf("resticara-%s-prune.timer", u.sanitized))
 	}
 
@@ -425,16 +459,25 @@ WantedBy=timers.target
 	}
 
 	fmt.Printf("Systemd timer files written to %s and activated.\n", unitDir)
+	if _, err := os.Stat(envFile); err != nil {
+		fmt.Printf("Warning: %s not found; restic credentials (RESTIC_PASSWORD, B2_ACCOUNT_ID, B2_ACCOUNT_KEY) must be set there for the timers to work.\n", envFile)
+	}
 	return nil
 }
 
 type DefaultCommandRunner struct{}
 
-func (runner DefaultCommandRunner) Run(cmd string) (bool, string, string) {
-	return cmdSuccess(cmd) // Here cmdSuccess is your existing function
+func (runner DefaultCommandRunner) Run(cmd string) (int, string, string) {
+	return runCommand(cmd)
 }
 
 func main() {
+	os.Exit(realMain())
+}
+
+// realMain returns the process exit code: 0 on success (including backups with warnings),
+// 1 on failure and 2 on usage errors, so systemd marks failed runs as failed.
+func realMain() int {
 	logwriter, err := syslog.New(syslog.LOG_NOTICE, "resticara")
 	if err != nil {
 		log.Fatal("Failed to initialize syslog writer:", err)
@@ -448,7 +491,7 @@ func main() {
 	args := flag.Args()
 	if len(args) == 0 {
 		printUsage()
-		return
+		return 2
 	}
 
 	configPath := searchForFile(*customConfig, []string{
@@ -458,25 +501,21 @@ func main() {
 	})
 	if configPath == "" {
 		fmt.Println("Error: config.ini not found in any of the expected locations")
-		return
+		return 1
 	}
 
 	config, err := readConfig(configPath)
 	if err != nil {
 		fmt.Printf("Error reading config: %v\n", err)
-		return
+		return 1
 	}
 
 	switch args[0] {
 	case "run":
-		templatePath := searchForFile(*customTemplate, []string{
-			"./templates/mail_template.txt",
-			"/etc/resticara/templates/mail_template.txt",
-			filepath.Join(os.Getenv("HOME"), ".config/resticara/mail_template.txt"),
-		})
+		templatePath := searchForFile(*customTemplate, templateLocations(configPath, "mail_template.txt"))
 		if templatePath == "" {
 			fmt.Println("Error: mail_template.txt not found in any of the expected locations")
-			return
+			return 1
 		}
 
 		hostID := config.HostID
@@ -495,6 +534,8 @@ func main() {
 			Date:   time.Now().Format(time.RFC1123),
 		}
 		allSuccess := true
+		hasWarnings := false
+		exitCode := 0
 
 		commandRunner := DefaultCommandRunner{}
 
@@ -502,13 +543,14 @@ func main() {
 		if len(args) > 1 {
 			if _, ok := config.Commands[args[1]]; !ok {
 				fmt.Printf("Command %s not found in config\n", args[1])
-				return
+				return 1
 			}
 			commandKeys = []string{args[1]}
 		} else {
 			for k := range config.Commands {
 				commandKeys = append(commandKeys, k)
 			}
+			sort.Strings(commandKeys)
 		}
 
 		for _, commandKey := range commandKeys {
@@ -516,79 +558,83 @@ func main() {
 			fmt.Printf("Executing command %s\n", commandKey)
 			commandInfo := CommandInfo{CommandKey: commandKey}
 
-			var backupCmd, forgetCmd string
-			bucket := settings["bucket"]
-			retentionDaily := settings["retention_daily"]
-			retentionWeekly := settings["retention_weekly"]
-			retentionMonthly := settings["retention_monthly"]
+			backupCmd, forgetCmd := buildCommands(commandKey, settings)
 
-			if strings.HasPrefix(commandKey, "dir:") {
-				directory := settings["directory"]
-				backupCmd = fmt.Sprintf("restic -r %s backup %s", bucket, directory)
-				forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
-			} else if strings.HasPrefix(commandKey, "mysql:") {
-				database := settings["database"]
-				backupCmd = fmt.Sprintf("mysqldump %s | restic -r %s backup --stdin --stdin-filename %s.sql", database, bucket, database)
-				forgetCmd = fmt.Sprintf("restic -r %s forget --keep-daily %s --keep-weekly %s --keep-monthly %s", bucket, retentionDaily, retentionWeekly, retentionMonthly)
-			}
-
-			success, stdout, stderr := commandRunner.Run(backupCmd)
+			code, stdout, stderr := commandRunner.Run(backupCmd)
 			commandInfo.BackupCmd = backupCmd
 			commandInfo.BackupOutput = stdout + "\nStderr: " + stderr
-			allSuccess = allSuccess && success
+			switch code {
+			case 0:
+			case resticExitIncomplete:
+				hasWarnings = true
+			default:
+				allSuccess = false
+			}
 
-			success, stdout, stderr = commandRunner.Run(forgetCmd)
+			code, stdout, stderr = commandRunner.Run(forgetCmd)
 			commandInfo.ForgetCmd = forgetCmd
 			commandInfo.ForgetOutput = stdout + "\nStderr: " + stderr
-			allSuccess = allSuccess && success
+			allSuccess = allSuccess && code == 0
 
 			mailData.Commands = append(mailData.Commands, commandInfo)
 		}
 
-		if allSuccess {
-			mailData.StatusMessage = "Backup successful"
-		} else {
-			mailData.StatusMessage = "BACKUP FAILED! See output above."
+		switch {
+		case !allSuccess:
+			mailData.StatusMessage = StatusFailure
+			exitCode = 1
+		case hasWarnings:
+			mailData.StatusMessage = StatusWarning
+		default:
+			mailData.StatusMessage = StatusSuccess
 		}
 
 		tmpl, err := template.ParseFiles(templatePath)
 		if err != nil {
 			fmt.Println("Error parsing template:", err)
-			return
+			return 1
 		}
 
 		var mailMessageBuffer bytes.Buffer
 		err = tmpl.Execute(&mailMessageBuffer, mailData)
 		if err != nil {
 			fmt.Println("Error executing template:", err)
-			return
+			return 1
 		}
 
 		var matrixMessageBuffer bytes.Buffer
 		if config.MatrixEnabled {
-			matrixTemplatePath := filepath.Join("templates", "matrix_template.html")
+			matrixTemplatePath := searchForFile("", templateLocations(configPath, "matrix_template.html"))
+			if matrixTemplatePath == "" {
+				fmt.Println("Error: matrix_template.html not found in any of the expected locations")
+				return 1
+			}
 			matrixTmpl, err := htmlTemplate.ParseFiles(matrixTemplatePath)
 			if err != nil {
 				fmt.Println("Error parsing matrix template:", err)
-				return
+				return 1
 			}
 			if err := matrixTmpl.Execute(&matrixMessageBuffer, mailData); err != nil {
 				fmt.Println("Error executing matrix template:", err)
-				return
+				return 1
 			}
 		}
 
 		var telegramMessageBuffer bytes.Buffer
 		if config.TelegramEnabled {
-			telegramTemplatePath := filepath.Join("templates", "telegram_template.html")
+			telegramTemplatePath := searchForFile("", templateLocations(configPath, "telegram_template.html"))
+			if telegramTemplatePath == "" {
+				fmt.Println("Error: telegram_template.html not found in any of the expected locations")
+				return 1
+			}
 			telegramTmpl, err := htmlTemplate.ParseFiles(telegramTemplatePath)
 			if err != nil {
 				fmt.Println("Error parsing telegram template:", err)
-				return
+				return 1
 			}
 			if err := telegramTmpl.Execute(&telegramMessageBuffer, mailData); err != nil {
 				fmt.Println("Error executing telegram template:", err)
-				return
+				return 1
 			}
 		}
 
@@ -611,6 +657,7 @@ func main() {
 
 			if err := emailNotifier.Send(emailConfig); err != nil {
 				fmt.Println(err)
+				exitCode = 1
 			} else {
 				fmt.Println("Email sent!")
 			}
@@ -631,6 +678,7 @@ func main() {
 
 			if err := matrixNotifier.Send(matrixConfig); err != nil {
 				fmt.Println(err)
+				exitCode = 1
 			} else {
 				fmt.Println("Matrix message sent!")
 			}
@@ -649,16 +697,18 @@ func main() {
 
 			if err := telegramNotifier.Send(telegramConfig); err != nil {
 				fmt.Println(err)
+				exitCode = 1
 			} else {
 				fmt.Println("Telegram message sent!")
 			}
 		} else {
 			fmt.Println("Telegram is disabled, not sending message.")
 		}
+		return exitCode
 	case "prune":
 		if len(args) < 2 {
 			fmt.Println("Usage: resticara prune <all|repository>")
-			return
+			return 2
 		}
 		repoArg := args[1]
 		uniqueBuckets := make(map[string]bool)
@@ -667,42 +717,43 @@ func main() {
 			uniqueBuckets[bucket] = true
 		}
 
-		commandRunner := DefaultCommandRunner{}
-
+		var buckets []string
 		if repoArg == "all" {
 			for bucket := range uniqueBuckets {
-				fmt.Printf("Pruning repository %s\n", bucket)
-				success, stdout, stderr := commandRunner.Run(fmt.Sprintf("restic -r %s prune", bucket))
-				fmt.Print(stdout)
-				if stderr != "" {
-					fmt.Printf("Stderr: %s\n", stderr)
-				}
-				if !success {
-					fmt.Printf("Prune failed for %s\n", bucket)
-				}
+				buckets = append(buckets, bucket)
 			}
+			sort.Strings(buckets)
 		} else {
 			if !uniqueBuckets[repoArg] {
 				fmt.Printf("Repository %s not found in config\n", repoArg)
-				return
+				return 1
 			}
-			fmt.Printf("Pruning repository %s\n", repoArg)
-			success, stdout, stderr := commandRunner.Run(fmt.Sprintf("restic -r %s prune", repoArg))
+			buckets = []string{repoArg}
+		}
+
+		commandRunner := DefaultCommandRunner{}
+		exitCode := 0
+		for _, bucket := range buckets {
+			fmt.Printf("Pruning repository %s\n", bucket)
+			code, stdout, stderr := commandRunner.Run(fmt.Sprintf("restic -r %s %s prune", bucket, resticRetryLock))
 			fmt.Print(stdout)
 			if stderr != "" {
 				fmt.Printf("Stderr: %s\n", stderr)
 			}
-			if !success {
-				fmt.Printf("Prune failed for %s\n", repoArg)
+			if code != 0 {
+				fmt.Printf("Prune failed for %s\n", bucket)
+				exitCode = 1
 			}
 		}
+		return exitCode
 	case "gentimer":
-		if err := generateTimers(config); err != nil {
+		if err := generateTimers(config, configPath); err != nil {
 			fmt.Printf("Error generating timers: %v\n", err)
+			return 1
 		}
+		return 0
 	default:
 		printUsage()
+		return 2
 	}
-
-	defer logwriter.Close()
 }
