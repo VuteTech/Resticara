@@ -33,6 +33,10 @@ type General struct {
 	RetentionPrune int
 	// Prune holds the default prune limits.
 	Prune PruneLimits
+	// CheckDays is the default interval of repository checks in days.
+	CheckDays int
+	// CheckSubset is the default amount of data a check reads, see Job.CheckSubset.
+	CheckSubset string
 	// Exclude applies to every dir job.
 	Exclude Exclude
 	// Notify says when reports are sent.
@@ -53,6 +57,9 @@ type Repository struct {
 	// PruneDays is the smallest prune interval of the jobs.
 	PruneDays int
 	Prune     PruneLimits
+	// CheckDays is the smallest check interval of the jobs.
+	CheckDays   int
+	CheckSubset string
 	// Jobs are the keys of the jobs that back up to this repository.
 	Jobs []string
 }
@@ -110,6 +117,8 @@ type Healthcheck struct {
 	URL string
 	// PruneURL is pinged by prune runs.
 	PruneURL string
+	// CheckURL is pinged by check runs.
+	CheckURL string
 }
 
 type JobType string
@@ -140,6 +149,11 @@ type Job struct {
 	PruneDays int
 	// Prune holds the prune limits, from the job or the [general] defaults.
 	Prune PruneLimits
+	// CheckDays is the interval of repository checks, from the job or [general].
+	CheckDays int
+	// CheckSubset is passed as --read-data-subset, for example "5%" or "10G";
+	// "none" checks only the repository structure without reading data.
+	CheckSubset string
 }
 
 type Retention struct {
@@ -163,13 +177,13 @@ func (e *Error) Error() string {
 var excludeKeys = []string{"exclude", "exclude_file", "exclude_caches", "exclude_if_present"}
 
 var knownKeys = map[string][]string{
-	"general":     append([]string{"hostID", "retention_prune", "notify", "prune_max_unused", "prune_max_repack_size"}, excludeKeys...),
+	"general":     append([]string{"hostID", "retention_prune", "notify", "prune_max_unused", "prune_max_repack_size", "check_interval", "check_read_data_subset"}, excludeKeys...),
 	"smtp":        {"enabled", "from", "username", "pass", "to", "server", "port"},
 	"matrix":      {"enabled", "server", "username", "pass", "room_id", "access_token"},
 	"telegram":    {"enabled", "bot_token", "chat_id"},
-	"healthcheck": {"url", "prune_url"},
-	"dir":         append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size"}, excludeKeys...),
-	"mysql":       {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size"},
+	"healthcheck": {"url", "prune_url", "check_url"},
+	"dir":         append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size", "check_interval", "check_read_data_subset"}, excludeKeys...),
+	"mysql":       {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size", "check_interval", "check_read_data_subset"},
 }
 
 // repeatableKeys may be set more than once in a section, each line adding a value.
@@ -217,6 +231,8 @@ func (p *parser) parse(file *ini.File) Config {
 		Notify:         NotifyAlways,
 		Prune:          p.pruneLimits(general, PruneLimits{}),
 	}
+	cfg.General.CheckDays = p.days(general, "check_interval", "[general]", 30)
+	cfg.General.CheckSubset = p.checkSubset(general, "5%")
 	switch notify := Notify(value(general, "notify")); notify {
 	case "":
 	case NotifyAlways, NotifyProblems:
@@ -267,6 +283,7 @@ func (p *parser) parse(file *ini.File) Config {
 	cfg.Healthcheck = Healthcheck{
 		URL:      p.pingURL(healthcheck, "url"),
 		PruneURL: p.pingURL(healthcheck, "prune_url"),
+		CheckURL: p.pingURL(healthcheck, "check_url"),
 	}
 
 	p.checkChannels(file, cfg)
@@ -298,13 +315,19 @@ func (p *parser) parse(file *ini.File) Config {
 	}
 	sort.Slice(cfg.Jobs, func(i, j int) bool { return cfg.Jobs[i].Key < cfg.Jobs[j].Key })
 
-	// one prune runs per repository, so its jobs must agree on the limits
+	// prune and check run once per repository, so its jobs must agree on their settings
 	first := make(map[string]Job)
 	for _, job := range cfg.Jobs {
-		if other, ok := first[job.Repository]; !ok {
+		other, ok := first[job.Repository]
+		if !ok {
 			first[job.Repository] = job
-		} else if other.Prune != job.Prune {
+			continue
+		}
+		if other.Prune != job.Prune {
 			p.errorf("%s and %s use repository %s but set different prune_max_unused or prune_max_repack_size", other.Key, job.Key, job.Repository)
+		}
+		if other.CheckSubset != job.CheckSubset {
+			p.errorf("%s and %s use repository %s but set different check_read_data_subset", other.Key, job.Key, job.Repository)
 		}
 	}
 
@@ -316,12 +339,14 @@ func (p *parser) job(section *ini.Section, jobType JobType, name string, general
 	p.checkKeys(section, string(jobType), false)
 
 	job := Job{
-		Key:        key,
-		Type:       jobType,
-		Name:       name,
-		Repository: value(section, "bucket"),
-		PruneDays:  p.pruneDays(section, key, general.RetentionPrune),
-		Prune:      p.pruneLimits(section, general.Prune),
+		Key:         key,
+		Type:        jobType,
+		Name:        name,
+		Repository:  value(section, "bucket"),
+		PruneDays:   p.pruneDays(section, key, general.RetentionPrune),
+		Prune:       p.pruneLimits(section, general.Prune),
+		CheckDays:   p.days(section, "check_interval", key, general.CheckDays),
+		CheckSubset: p.checkSubset(section, general.CheckSubset),
 	}
 	if job.Repository == "" {
 		p.errorf("'bucket' is required for %s", key)
@@ -386,19 +411,45 @@ func (p *parser) retention(section *ini.Section, key string) int {
 }
 
 func (p *parser) pruneDays(section *ini.Section, where string, defaultDays int) int {
-	raw := value(section, "retention_prune")
+	return p.days(section, "retention_prune", where, defaultDays)
+}
+
+// days reads an interval in days of at least 1.
+func (p *parser) days(section *ini.Section, key, where string, defaultDays int) int {
+	raw := value(section, key)
 	if raw == "" {
 		return defaultDays
 	}
 	days, err := strconv.Atoi(raw)
 	if err != nil {
-		p.errorf("'retention_prune' for %s must be an integer", where)
+		p.errorf("'%s' for %s must be an integer", key, where)
 		return defaultDays
 	}
 	if days < 1 {
-		p.errorf("'retention_prune' for %s must be at least 1", where)
+		p.errorf("'%s' for %s must be at least 1", key, where)
 	}
 	return days
+}
+
+var percentPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?)%$`)
+
+// checkSubset reads check_read_data_subset: a percentage above 0 and at most 100,
+// a size such as 10G, or "none". restic's n/t groups are rejected because a fixed
+// group would check the same part of the repository every time.
+func (p *parser) checkSubset(section *ini.Section, base string) string {
+	raw := value(section, "check_read_data_subset")
+	if raw == "" {
+		return base
+	}
+	if m := percentPattern.FindStringSubmatch(raw); m != nil {
+		if pct, _ := strconv.ParseFloat(m[1], 64); pct > 0 && pct <= 100 {
+			return raw
+		}
+	} else if raw == "none" || sizePattern.MatchString(raw) && raw != "0" {
+		return raw
+	}
+	p.errorf("'check_read_data_subset' in [%s] must be a percentage above 0%% and at most 100%%, a size such as 10G, or none; got %q", section.Name(), raw)
+	return base
 }
 
 // exclude reads the exclude keys of a section and adds them to base.
@@ -607,12 +658,11 @@ func (c Config) Repositories() []Repository {
 		if !ok {
 			i = len(repos)
 			index[job.Repository] = i
-			repos = append(repos, Repository{URL: job.Repository, PruneDays: job.PruneDays, Prune: job.Prune})
+			repos = append(repos, Repository{URL: job.Repository, PruneDays: job.PruneDays, Prune: job.Prune, CheckDays: job.CheckDays, CheckSubset: job.CheckSubset})
 		}
 		repos[i].Jobs = append(repos[i].Jobs, job.Key)
-		if job.PruneDays < repos[i].PruneDays {
-			repos[i].PruneDays = job.PruneDays
-		}
+		repos[i].PruneDays = min(repos[i].PruneDays, job.PruneDays)
+		repos[i].CheckDays = min(repos[i].CheckDays, job.CheckDays)
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].URL < repos[j].URL })
 	return repos

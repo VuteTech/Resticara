@@ -57,7 +57,12 @@ func TestGentimer(t *testing.T) {
 	}
 	repoA := unitWithPrefix(t, files, "resticara-prune-srv-repo-a-")
 	mysql := unitWithPrefix(t, files, "resticara-prune-b2-bucket-mysql-")
-	want := []string{"other.service", "resticara-backup.service", "resticara-backup.timer", mysql + ".service", mysql + ".timer", repoA + ".service", repoA + ".timer"}
+	checkA := unitWithPrefix(t, files, "resticara-check-srv-repo-a-")
+	checkMysql := unitWithPrefix(t, files, "resticara-check-b2-bucket-mysql-")
+	want := []string{"other.service",
+		"resticara-backup.service", "resticara-backup.timer",
+		checkMysql + ".service", checkMysql + ".timer", checkA + ".service", checkA + ".timer",
+		mysql + ".service", mysql + ".timer", repoA + ".service", repoA + ".timer"}
 	if strings.Join(files, " ") != strings.Join(want, " ") {
 		t.Fatalf("unit files:\n%s\nwant:\n%s", strings.Join(files, "\n"), strings.Join(want, "\n"))
 	}
@@ -89,15 +94,22 @@ func TestGentimer(t *testing.T) {
 	expectLines(t, repoA+".timer", unit(repoA+".timer"), "OnActiveSec=1h", "OnUnitActiveSec=14d", "RandomizedDelaySec=1h")
 	expectLines(t, mysql+".timer", unit(mysql+".timer"), "OnUnitActiveSec=7d")
 	expectLines(t, mysql+".service", unit(mysql+".service"),
+		"After=network-online.target resticara-backup.service",
 		"ExecStart="+bin+" --config="+config+" prune b2:bucket:mysql/",
 	)
+	expectLines(t, checkA+".service", unit(checkA+".service"),
+		"After=network-online.target resticara-backup.service "+repoA+".service",
+		"ExecStart="+bin+" --config="+config+" check /srv/repo-a",
+		"EnvironmentFile=-"+e.path("restic.env"),
+	)
+	expectLines(t, checkA+".timer", unit(checkA+".timer"), "OnActiveSec=6h", "OnUnitActiveSec=30d", "RandomizedDelaySec=1h")
 
 	var disabled []string
 	for _, base := range []string{"resticara-dir-a", "resticara-dir-a-prune", "resticara-dir-old"} {
 		disabled = append(disabled, "disable --now "+base+".service", "disable --now "+base+".timer")
 	}
 	sort.Strings(disabled)
-	checkSystemctlCalls(t, callLog, disabled, []string{"resticara-backup.timer", mysql + ".timer", repoA + ".timer"})
+	checkSystemctlCalls(t, callLog, disabled, []string{"resticara-backup.timer", mysql + ".timer", checkMysql + ".timer", repoA + ".timer", checkA + ".timer"})
 }
 
 // unitWithPrefix returns the base name of the unit whose name starts with prefix.

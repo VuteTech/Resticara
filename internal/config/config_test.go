@@ -64,7 +64,7 @@ anything = goes
 		t.Fatal(err)
 	}
 
-	if !reflect.DeepEqual(cfg.General, General{HostID: "server-1", RetentionPrune: 21, Notify: NotifyAlways}) {
+	if !reflect.DeepEqual(cfg.General, General{HostID: "server-1", RetentionPrune: 21, Notify: NotifyAlways, CheckDays: 30, CheckSubset: "5%"}) {
 		t.Errorf("General = %+v", cfg.General)
 	}
 	// SMTP is enabled unless disabled explicitly
@@ -79,8 +79,8 @@ anything = goes
 	}
 
 	want := []Job{
-		{Key: "dir:site", Type: JobDir, Name: "site", Repository: "b2:bucket:website/", Directories: []string{"/var/www/site"}, Retention: Retention{4, 5, 6}, PruneDays: 21},
-		{Key: "mysql:site", Type: JobMySQL, Name: "site", Repository: "b2:bucket:mysql/", Database: "site_db", Retention: Retention{2, 7, 3}, PruneDays: 14},
+		{Key: "dir:site", Type: JobDir, Name: "site", Repository: "b2:bucket:website/", Directories: []string{"/var/www/site"}, Retention: Retention{4, 5, 6}, PruneDays: 21, CheckDays: 30, CheckSubset: "5%"},
+		{Key: "mysql:site", Type: JobMySQL, Name: "site", Repository: "b2:bucket:mysql/", Database: "site_db", Retention: Retention{2, 7, 3}, PruneDays: 14, CheckDays: 30, CheckSubset: "5%"},
 	}
 	if !reflect.DeepEqual(cfg.Jobs, want) {
 		t.Errorf("Jobs =\n%+v\nwant\n%+v", cfg.Jobs, want)
@@ -535,5 +535,47 @@ prune_url = https://healthchecks.example.com/ping/key/prune?create=1
 'prune_url' in [healthcheck] must be an http or https URL, got "https://"`
 	if err == nil || err.Error() != want2 {
 		t.Errorf("error:\n%v", err)
+	}
+}
+
+func TestLoadCheck(t *testing.T) {
+	job := func(name, repo, extra string) string {
+		return "[dir:" + name + "]\nbucket = " + repo + "\ndirectory = /data\nretention_daily = 1\nretention_weekly = 1\nretention_monthly = 1\n" + extra + "\n"
+	}
+	cfg, err := Load(writeConfig(t, "[general]\ncheck_interval = 14\ncheck_read_data_subset = 10G\n[smtp]\nenabled = false\n[healthcheck]\ncheck_url = https://hc-ping.com/abc\n"+
+		job("a", "/repo-a", "")+job("b", "/repo-b", "check_interval = 7\ncheck_read_data_subset = 2.5%")+job("c", "/repo-b", "check_interval = 60\ncheck_read_data_subset = 2.5%")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := cfg.Repositories()
+	if repos[0].CheckDays != 14 || repos[0].CheckSubset != "10G" || repos[1].CheckDays != 7 || repos[1].CheckSubset != "2.5%" {
+		t.Errorf("repositories = %+v", repos)
+	}
+	if cfg.Healthcheck.CheckURL != "https://hc-ping.com/abc" {
+		t.Errorf("CheckURL = %q", cfg.Healthcheck.CheckURL)
+	}
+
+	defaults, err := Load(writeConfig(t, "[smtp]\nenabled = false\n"+job("a", "/repo", "")))
+	if err != nil || defaults.Jobs[0].CheckDays != 30 || defaults.Jobs[0].CheckSubset != "5%" {
+		t.Errorf("defaults = %+v, %v", defaults.Jobs, err)
+	}
+
+	for _, ok := range []string{"100%", "0.5%", "500M", "1g", "none"} {
+		if _, err := Load(writeConfig(t, "[general]\ncheck_read_data_subset = "+ok+"\n")); err != nil {
+			t.Errorf("check_read_data_subset = %s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"0%", "101%", "1/5", "0", "half"} {
+		_, err := Load(writeConfig(t, "[general]\ncheck_read_data_subset = "+bad+"\n"))
+		if err == nil || !strings.Contains(err.Error(), "'check_read_data_subset' in [general] must be") {
+			t.Errorf("check_read_data_subset = %s: error %v", bad, err)
+		}
+	}
+
+	_, err = Load(writeConfig(t, "[general]\ncheck_interval = 0\n"+job("a", "/shared", "check_read_data_subset = 1%")+job("b", "/shared", "")))
+	want := `'check_interval' for [general] must be at least 1
+dir:a and dir:b use repository /shared but set different check_read_data_subset`
+	if err == nil || err.Error() != want {
+		t.Errorf("error:\n%v\nwant:\n%s", err, want)
 	}
 }

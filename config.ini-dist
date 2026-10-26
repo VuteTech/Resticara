@@ -9,6 +9,9 @@ hostID=hostname
 ;; limits for restic prune, see the README
 ;prune_max_unused = 5%
 ;prune_max_repack_size = 2G
+;; repository checks, see the README
+;check_interval = 30
+;check_read_data_subset = 5%
 ; always: send a report after every run; problems: only for warnings and failures
 ;notify = always
 retention_prune = 14
@@ -44,6 +47,7 @@ enabled = false
 ;; Healthchecks ping URLs, to get alerts when backups fail or stop running
 ;url = https://hc-ping.com/<uuid>
 ;prune_url = https://hc-ping.com/<uuid>
+;check_url = https://hc-ping.com/<uuid>
 
 [dir:website]
 bucket = b2:bucket:wpsites/

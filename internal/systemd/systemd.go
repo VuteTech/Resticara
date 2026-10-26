@@ -33,7 +33,12 @@ type Plan struct {
 }
 
 // NewPlan renders one backup timer that runs all backups sequentially (one report per
-// run) and a prune timer per repository. binary and configPath must be absolute.
+// run), and a prune timer and a check timer per repository. binary and configPath
+// must be absolute.
+//
+// prune and check take an exclusive lock on the repository, so their services are
+// ordered after the backup (and the check after the prune): when one is due while
+// the other still runs, systemd starts it once the other has finished.
 func NewPlan(cfg config.Config, binary, configPath string) Plan {
 	serviceEnv := fmt.Sprintf(`EnvironmentFile=-%s
 Environment=RESTIC_CACHE_DIR=/var/cache/resticara
@@ -80,10 +85,11 @@ WantedBy=timers.target
 	}
 
 	for _, repo := range cfg.Repositories() {
+		base := pruneUnitBase(repo.URL)
 		pruneService := fmt.Sprintf(`[Unit]
 Description=Resticara prune for %s
 Wants=network-online.target
-After=network-online.target
+After=network-online.target resticara-backup.service
 
 [Service]
 Type=oneshot
@@ -108,19 +114,58 @@ RandomizedDelaySec=1h
 WantedBy=timers.target
 `, escapeSpecifiers(repo.URL), repo.PruneDays)
 
-		base := pruneUnitBase(repo.URL)
+		checkBase := checkUnitBase(repo.URL)
+		checkService := fmt.Sprintf(`[Unit]
+Description=Resticara check for %s
+Wants=network-online.target
+After=network-online.target resticara-backup.service %s.service
+
+[Service]
+Type=oneshot
+ExecStart=%s
+%s
+
+[Install]
+WantedBy=multi-user.target
+`, escapeSpecifiers(repo.URL), base, execStart("check", repo.URL), serviceEnv)
+
+		// the first check runs some hours after the first prune, so both rarely queue up
+		checkTimer := fmt.Sprintf(`[Unit]
+Description=Resticara check timer for %s
+
+[Timer]
+OnActiveSec=6h
+OnUnitActiveSec=%dd
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+`, escapeSpecifiers(repo.URL), repo.CheckDays)
+
 		plan.Units = append(plan.Units,
 			Unit{Name: base + ".service", Content: pruneService},
 			Unit{Name: base + ".timer", Content: pruneTimer},
+			Unit{Name: checkBase + ".service", Content: checkService},
+			Unit{Name: checkBase + ".timer", Content: checkTimer},
 		)
-		plan.Timers = append(plan.Timers, base+".timer")
+		plan.Timers = append(plan.Timers, base+".timer", checkBase+".timer")
 	}
 	return plan
 }
 
-// pruneUnitBase names the prune units of a repository: a readable part made of the
-// URL's letters and digits, and a short hash so different URLs never share a name.
+// pruneUnitBase names the prune units of a repository.
 func pruneUnitBase(url string) string {
+	return repoUnitBase("resticara-prune-", url)
+}
+
+// checkUnitBase names the check units of a repository.
+func checkUnitBase(url string) string {
+	return repoUnitBase("resticara-check-", url)
+}
+
+// repoUnitBase names units of a repository: the prefix, a readable part made of the
+// URL's letters and digits, and a short hash so different URLs never share a name.
+func repoUnitBase(prefix, url string) string {
 	var b strings.Builder
 	dash := false
 	for _, r := range url {
@@ -137,7 +182,7 @@ func pruneUnitBase(url string) string {
 		readable = strings.TrimSuffix(readable[:40], "-")
 	}
 	sum := sha256.Sum256([]byte(url))
-	return "resticara-prune-" + readable + "-" + hex.EncodeToString(sum[:4])
+	return prefix + readable + "-" + hex.EncodeToString(sum[:4])
 }
 
 // escapeSpecifiers escapes "%", which systemd expands in most unit settings.
