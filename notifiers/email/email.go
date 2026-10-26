@@ -16,7 +16,7 @@ type EmailConfig struct {
 	From       string
 	Username   string
 	Password   string
-	To         string
+	To         []string
 	SmtpServer string
 	SmtpPort   string
 	Subject    string
@@ -37,13 +37,12 @@ func (s SmtpEmailNotifier) Send(emailConfig EmailConfig) error {
 
 	addr := net.JoinHostPort(emailConfig.SmtpServer, emailConfig.SmtpPort)
 	auth := smtp.PlainAuth("", emailConfig.Username, emailConfig.Password, emailConfig.SmtpServer)
-	to := []string{emailConfig.To}
 
 	// port 465 uses implicit TLS (SMTPS); other ports use STARTTLS when the server offers it
 	if emailConfig.SmtpPort == "465" {
-		err = sendMailTLS(addr, emailConfig.SmtpServer, auth, emailConfig.From, to, message)
+		err = sendMailTLS(addr, emailConfig.SmtpServer, auth, emailConfig.From, emailConfig.To, message)
 	} else {
-		err = smtp.SendMail(addr, auth, emailConfig.From, to, message)
+		err = smtp.SendMail(addr, auth, emailConfig.From, emailConfig.To, message)
 	}
 	if err != nil {
 		return fmt.Errorf("Error sending email: %v", err)
@@ -61,7 +60,7 @@ func buildMessage(emailConfig EmailConfig, now time.Time) ([]byte, error) {
 	var msg bytes.Buffer
 	headers := []string{
 		"From: " + emailConfig.From,
-		"To: " + emailConfig.To,
+		"To: " + strings.Join(emailConfig.To, ", "),
 		"Subject: " + mime.QEncoding.Encode("utf-8", emailConfig.Subject),
 		"Date: " + now.Format(time.RFC1123Z),
 		fmt.Sprintf("Message-ID: <%d.resticara@%s>", now.UnixNano(), domain),

@@ -74,6 +74,21 @@ func realMain() int {
 		fmt.Println(warning)
 	}
 
+	// the env file holds secrets for restic and the notifiers; under systemd the
+	// unit loads it too, here it makes manual runs behave the same
+	envFile := config.EnvFilePath(configPath)
+	if warning := config.PermissionWarning(envFile); warning != "" {
+		fmt.Println(warning)
+	}
+	envWarnings, err := config.LoadEnvFile(envFile)
+	if err != nil {
+		fmt.Printf("Error reading %s: %v\n", envFile, err)
+		return 1
+	}
+	for _, warning := range envWarnings {
+		fmt.Println("Warning: " + warning)
+	}
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		printConfigError(err)

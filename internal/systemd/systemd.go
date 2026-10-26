@@ -15,10 +15,6 @@ import (
 	"resticara/internal/config"
 )
 
-// EnvFile is the name of the file next to the config that holds restic credentials
-// (RESTIC_PASSWORD, B2_ACCOUNT_ID, B2_ACCOUNT_KEY, ...).
-const EnvFile = "restic.env"
-
 type Unit struct {
 	Name    string
 	Content string
@@ -42,7 +38,7 @@ type Plan struct {
 func NewPlan(cfg config.Config, binary, configPath string) Plan {
 	serviceEnv := fmt.Sprintf(`EnvironmentFile=-%s
 Environment=RESTIC_CACHE_DIR=/var/cache/resticara
-CacheDirectory=resticara`, escapeSpecifiers(filepath.Join(filepath.Dir(configPath), EnvFile)))
+CacheDirectory=resticara`, escapeSpecifiers(config.EnvFilePath(configPath)))
 	execStart := func(args ...string) string {
 		quoted := []string{execArg(binary), execArg("--config=" + configPath)}
 		for _, arg := range args {
@@ -368,7 +364,7 @@ func Generate(sys Systemctl, cfg config.Config, binary, configPath string, out i
 	}
 
 	fmt.Fprintf(out, "Systemd timer files written to %s and activated.\n", unitDir)
-	envFile := filepath.Join(filepath.Dir(configPath), EnvFile)
+	envFile := config.EnvFilePath(configPath)
 	if _, err := os.Stat(envFile); err != nil {
 		fmt.Fprintf(out, "Warning: %s not found; restic credentials (RESTIC_PASSWORD, B2_ACCOUNT_ID, B2_ACCOUNT_KEY) must be set there for the timers to work.\n", envFile)
 	} else if warning := config.PermissionWarning(envFile); warning != "" {

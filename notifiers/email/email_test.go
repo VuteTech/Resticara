@@ -13,7 +13,7 @@ import (
 func TestBuildMessage(t *testing.T) {
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	body := "Backup report\nfile: снимка.txt\n" + strings.Repeat("x", 200) + "\n"
-	raw, err := buildMessage(EmailConfig{From: "bot@example.com", To: "admin@example.com", Subject: "Backup successful ✅", Body: body}, now)
+	raw, err := buildMessage(EmailConfig{From: "bot@example.com", To: []string{"admin@example.com", "ops@example.com"}, Subject: "Backup successful ✅", Body: body}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +31,9 @@ func TestBuildMessage(t *testing.T) {
 	}
 	if d, err := msg.Header.Date(); err != nil || !d.Equal(now) {
 		t.Errorf("date = %v, %v", d, err)
+	}
+	if msg.Header.Get("To") != "admin@example.com, ops@example.com" {
+		t.Errorf("To = %q", msg.Header.Get("To"))
 	}
 	if !strings.HasSuffix(msg.Header.Get("Message-ID"), "@example.com>") || msg.Header.Get("Content-Type") != "text/plain; charset=UTF-8" {
 		t.Errorf("unexpected headers: %v", msg.Header)

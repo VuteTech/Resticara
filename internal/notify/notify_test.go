@@ -46,7 +46,7 @@ var messages = Messages{Mail: "mail body", Matrix: "<b>matrix</b>", Telegram: "<
 
 func TestSendAllChannels(t *testing.T) {
 	cfg := config.Config{
-		SMTP:     config.SMTP{Enabled: true, From: "bot@example.com", To: "admin@example.com", Server: "mail.example.com", Port: "587", Username: "bot", Pass: "pw"},
+		SMTP:     config.SMTP{Enabled: true, From: "bot@example.com", To: []string{"admin@example.com"}, Server: "mail.example.com", Port: "587", Username: "bot", Pass: "pw"},
 		Matrix:   config.Matrix{Enabled: true, Server: "https://matrix.example.com", RoomID: "!r:x", AccessToken: "tok"},
 		Telegram: config.Telegram{Enabled: true, BotToken: "123:abc", ChatID: 42},
 	}

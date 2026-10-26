@@ -136,9 +136,15 @@ var ansi = regexp.MustCompile("\x1b\\[[0-9;]*m")
 // resticara runs the binary from "/", the working directory systemd uses.
 func (e *env) resticara(args ...string) result {
 	e.t.Helper()
+	return e.resticaraWithEnv(e.environ(), args...)
+}
+
+// resticaraWithEnv runs the binary with the given environment.
+func (e *env) resticaraWithEnv(environ []string, args ...string) result {
+	e.t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = "/"
-	cmd.Env = e.environ()
+	cmd.Env = environ
 	out, err := cmd.CombinedOutput()
 	res := result{output: ansi.ReplaceAllString(string(out), "")}
 	var exitErr *exec.ExitError

@@ -88,13 +88,16 @@ type Exclude struct {
 }
 
 type SMTP struct {
+	// Enabled defaults to true when a server is configured.
 	Enabled  bool
 	From     string
 	Username string
-	Pass     string
-	To       string
-	Server   string
-	Port     string
+	// Pass falls back to the SMTP_PASSWORD environment variable.
+	Pass string
+	// To holds the recipients, comma-separated in the config.
+	To     []string
+	Server string
+	Port   string
 }
 
 type Matrix struct {
@@ -263,13 +266,17 @@ func (p *parser) parse(file *ini.File) Config {
 	smtp := file.Section("smtp")
 	p.checkKeys(smtp, "smtp", true)
 	cfg.SMTP = SMTP{
-		Enabled:  p.boolean(smtp, "enabled", true),
 		From:     value(smtp, "from"),
 		Username: value(smtp, "username"),
-		Pass:     value(smtp, "pass"),
-		To:       value(smtp, "to"),
+		Pass:     secret(smtp, "pass", "SMTP_PASSWORD"),
 		Server:   value(smtp, "server"),
 		Port:     value(smtp, "port"),
+	}
+	cfg.SMTP.Enabled = p.boolean(smtp, "enabled", cfg.SMTP.Server != "")
+	for _, to := range strings.Split(value(smtp, "to"), ",") {
+		if to = strings.TrimSpace(to); to != "" {
+			cfg.SMTP.To = append(cfg.SMTP.To, to)
+		}
 	}
 
 	matrix := file.Section("matrix")
@@ -278,16 +285,16 @@ func (p *parser) parse(file *ini.File) Config {
 		Enabled:     p.boolean(matrix, "enabled", false),
 		Server:      value(matrix, "server"),
 		Username:    value(matrix, "username"),
-		Pass:        value(matrix, "pass"),
+		Pass:        secret(matrix, "pass", "MATRIX_PASSWORD"),
 		RoomID:      value(matrix, "room_id"),
-		AccessToken: value(matrix, "access_token"),
+		AccessToken: secret(matrix, "access_token", "MATRIX_ACCESS_TOKEN"),
 	}
 
 	telegram := file.Section("telegram")
 	p.checkKeys(telegram, "telegram", true)
 	cfg.Telegram = Telegram{
 		Enabled:  p.boolean(telegram, "enabled", false),
-		BotToken: value(telegram, "bot_token"),
+		BotToken: secret(telegram, "bot_token", "TELEGRAM_BOT_TOKEN"),
 	}
 	if raw := value(telegram, "chat_id"); raw != "" {
 		chatID, err := strconv.ParseInt(raw, 10, 64)
@@ -626,11 +633,8 @@ func (p *parser) checkChannels(file *ini.File, cfg Config) {
 	}
 
 	if cfg.SMTP.Enabled {
-		m := missing("server", cfg.SMTP.Server, "port", cfg.SMTP.Port, "from", cfg.SMTP.From, "to", cfg.SMTP.To)
-		switch {
-		case value(file.Section("smtp"), "enabled") == "" && cfg.SMTP.Server == "":
-			p.warnf("email is enabled by default but [smtp] has no server; set 'enabled = false' in [smtp] or configure it")
-		case len(m) > 0:
+		m := missing("server", cfg.SMTP.Server, "port", cfg.SMTP.Port, "from", cfg.SMTP.From, "to", strings.Join(cfg.SMTP.To, ","))
+		if len(m) > 0 {
 			p.warnf("[smtp] is enabled but %s not set, so email cannot be sent", strings.Join(m, ", "))
 		}
 	}
@@ -652,6 +656,15 @@ func (p *parser) checkChannels(file *ini.File, cfg Config) {
 			p.warnf("[telegram] is enabled but %s not set, so Telegram messages cannot be sent", strings.Join(m, ", "))
 		}
 	}
+}
+
+// secret returns a key's value, or the environment variable when the key is not set,
+// so secrets can live in the env file instead of the config.
+func secret(section *ini.Section, key, envVar string) string {
+	if v := value(section, key); v != "" {
+		return v
+	}
+	return os.Getenv(envVar)
 }
 
 // value returns the last value of a key, like a plain INI parser would, or "".
