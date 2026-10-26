@@ -69,7 +69,7 @@ func TestStartAndFinish(t *testing.T) {
 	if len(s.requests) != 2 || s.requests[0] != want[0] || s.requests[1] != want[1] {
 		t.Errorf("requests:\n%+v\nwant:\n%+v", s.requests, want)
 	}
-	if New("x").RunID == New("x").RunID {
+	if a, b := New("x"), New("x"); a.RunID == b.RunID {
 		t.Error("run IDs repeat")
 	}
 }

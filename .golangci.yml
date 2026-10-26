@@ -1,0 +1,59 @@
+version: "2"
+
+run:
+  # also lint the integration tests
+  build-tags:
+    - integration
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  enable:
+    - gosec
+    - misspell
+
+  settings:
+    errcheck:
+      exclude-functions:
+        # output to the terminal and to buffers
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # closing what was only read from
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (*crypto/tls.Conn).Close
+        - (*net/smtp.Client).Close
+        # if syslog fails there is nowhere to report it
+        - (*log/syslog.Writer).Close
+        - (resticara/internal/report.Logger).Notice
+    gosec:
+      excludes:
+        # unhandled errors are errcheck's job, with the exclusions above
+        - G104
+    staticcheck:
+      checks:
+        - all
+        # defaults
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        # De Morgan rewrites; a negated group often reads better
+        - -QF1001
+
+  exclusions:
+    rules:
+      # tests create temporary files and run commands with test arguments
+      - path: '_test\.go'
+        linters:
+          - gosec
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

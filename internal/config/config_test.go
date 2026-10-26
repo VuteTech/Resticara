@@ -623,7 +623,12 @@ read_write_paths = /srv/extra
 }
 
 func TestLoadSMTP(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "[smtp]\nserver = mail.example.com\nport = 587\nfrom = bot@example.com\nto = admin@example.com, ops@example.com ,,\n"))
+	cfg, err := Load(writeConfig(t, `[smtp]
+server = mail.example.com
+port = 587
+from = bot@example.com
+to = admin@example.com, ops@example.com ,,
+`))
 	if err != nil {
 		t.Fatal(err)
 	}

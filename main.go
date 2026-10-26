@@ -225,9 +225,9 @@ func backupAndReport(cfg config.Config, configPath, customTemplate string, args 
 		exitCode = 1
 	}
 
-	messages, err := renderMessages(cfg, configPath, templatePath, rep)
-	if err != nil {
-		return fail(err.Error())
+	messages, problem := renderMessages(cfg, configPath, templatePath, rep)
+	if problem != "" {
+		return fail(problem)
 	}
 
 	report.Log(logwriter, rep)
@@ -250,36 +250,34 @@ func fail(message string) (int, string) {
 }
 
 // renderMessages renders the report for email and for the enabled chat channels.
-// The error is the complete message to print.
-func renderMessages(cfg config.Config, configPath, mailTemplatePath string, rep report.Report) (notify.Messages, error) {
-	var messages notify.Messages
+// When that fails, problem is the message to print.
+func renderMessages(cfg config.Config, configPath, mailTemplatePath string, rep report.Report) (messages notify.Messages, problem string) {
 	var err error
-
 	if messages.Mail, err = report.RenderText(mailTemplatePath, "", rep); err != nil {
-		return messages, errors.New("Error " + err.Error())
+		return messages, "Error " + err.Error()
 	}
 
 	if cfg.Matrix.Enabled {
 		path := config.Find("", report.TemplateLocations(configPath, "matrix_template.html"))
 		if path == "" {
-			return messages, errors.New("Error: matrix_template.html not found in any of the expected locations")
+			return messages, "Error: matrix_template.html not found in any of the expected locations"
 		}
 		if messages.Matrix, err = report.RenderHTML(path, "matrix", rep); err != nil {
-			return messages, errors.New("Error " + err.Error())
+			return messages, "Error " + err.Error()
 		}
 	}
 
 	if cfg.Telegram.Enabled {
 		path := config.Find("", report.TemplateLocations(configPath, "telegram_template.html"))
 		if path == "" {
-			return messages, errors.New("Error: telegram_template.html not found in any of the expected locations")
+			return messages, "Error: telegram_template.html not found in any of the expected locations"
 		}
 		if messages.Telegram, err = report.RenderHTML(path, "telegram", rep); err != nil {
-			return messages, errors.New("Error " + err.Error())
+			return messages, "Error " + err.Error()
 		}
 	}
 
-	return messages, nil
+	return messages, ""
 }
 
 // maintenance is a command that runs once per repository, such as prune or check.

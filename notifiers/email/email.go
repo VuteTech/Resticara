@@ -32,7 +32,7 @@ type SmtpEmailNotifier struct{}
 func (s SmtpEmailNotifier) Send(emailConfig EmailConfig) error {
 	message, err := buildMessage(emailConfig, time.Now())
 	if err != nil {
-		return fmt.Errorf("Error building email: %v", err)
+		return fmt.Errorf("building the message: %w", err)
 	}
 
 	addr := net.JoinHostPort(emailConfig.SmtpServer, emailConfig.SmtpPort)
@@ -45,7 +45,7 @@ func (s SmtpEmailNotifier) Send(emailConfig EmailConfig) error {
 		err = smtp.SendMail(addr, auth, emailConfig.From, emailConfig.To, message)
 	}
 	if err != nil {
-		return fmt.Errorf("Error sending email: %v", err)
+		return err
 	}
 
 	return nil

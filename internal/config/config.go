@@ -624,7 +624,7 @@ func (p *parser) pingURL(section *ini.Section, key string) string {
 func (p *parser) checkChannels(file *ini.File, cfg Config) {
 	missing := func(pairs ...string) []string {
 		var names []string
-		for i := 0; i < len(pairs); i += 2 {
+		for i := 0; i+1 < len(pairs); i += 2 {
 			if pairs[i+1] == "" {
 				names = append(names, "'"+pairs[i]+"'")
 			}

@@ -59,8 +59,9 @@ func (s ClientAPINotifier) Send(cfg MatrixConfig) error {
 			return fmt.Errorf("failed to login: %w", err)
 		}
 		c.token = resp.AccessToken
-		// log out again, otherwise every run leaves a new device on the account
-		defer c.do(http.MethodPost, "/logout", struct{}{}, nil)
+		// log out again, otherwise every run leaves a new device on the account; the
+		// message is already sent or failed, so a failed logout changes nothing
+		defer func() { _ = c.do(http.MethodPost, "/logout", struct{}{}, nil) }()
 	}
 
 	room := url.PathEscape(cfg.RoomID)
@@ -108,7 +109,8 @@ func (c client) do(method, path string, body, out any) error {
 			ErrCode string `json:"errcode"`
 			Error   string `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&apiErr)
+		// best effort: proxies may answer errors with something other than JSON
+		_ = json.NewDecoder(resp.Body).Decode(&apiErr)
 		return fmt.Errorf("%s %s: HTTP %d %s %s", method, path, resp.StatusCode, apiErr.ErrCode, apiErr.Error)
 	}
 	if out != nil {

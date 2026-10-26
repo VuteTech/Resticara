@@ -64,7 +64,7 @@ func (n Notifiers) Send(cfg config.Config, r report.Report, m Messages, out io.W
 			Body:       m.Mail,
 		})
 		if err != nil {
-			fmt.Fprintln(out, err)
+			fmt.Fprintf(out, "Error sending email: %v\n", err)
 			ok = false
 		} else {
 			fmt.Fprintln(out, "Email sent!")
@@ -83,7 +83,7 @@ func (n Notifiers) Send(cfg config.Config, r report.Report, m Messages, out io.W
 			Message:     m.Matrix,
 		})
 		if err != nil {
-			fmt.Fprintln(out, err)
+			fmt.Fprintf(out, "Error sending Matrix message: %v\n", err)
 			ok = false
 		} else {
 			fmt.Fprintln(out, "Matrix message sent!")
@@ -99,7 +99,7 @@ func (n Notifiers) Send(cfg config.Config, r report.Report, m Messages, out io.W
 			Message:  m.Telegram,
 		})
 		if err != nil {
-			fmt.Fprintln(out, err)
+			fmt.Fprintf(out, "Error sending Telegram message: %v\n", err)
 			ok = false
 		} else {
 			fmt.Fprintln(out, "Telegram message sent!")

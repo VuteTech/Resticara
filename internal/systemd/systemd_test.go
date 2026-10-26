@@ -300,3 +300,22 @@ func TestServiceSettingsOptions(t *testing.T) {
 		t.Errorf("settings without hardening:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestApplyStaleUnitCannotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only directory")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "resticara-old.timer"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	err := Apply(&fakeSystemctl{}, dir, Plan{})
+	if err == nil || !strings.Contains(err.Error(), "removing stale unit") {
+		t.Errorf("error = %v, want the failed removal", err)
+	}
+}
