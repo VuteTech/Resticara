@@ -31,12 +31,20 @@ func TestGentimer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// units left over from an older layout or from removed jobs, and an unrelated unit
-	for _, name := range []string{"resticara-dir-old.service", "resticara-dir-old.timer", "resticara-dir-a.timer", "resticara-dir-a-prune.timer", "other.service"} {
+	// units left over from older layouts (per-job backup and prune timers) or from
+	// removed jobs, and an unrelated unit
+	stale := []string{"resticara-dir-old.service", "resticara-dir-old.timer", "resticara-dir-a.timer", "resticara-dir-a-prune.service", "resticara-dir-a-prune.timer"}
+	for _, name := range append(stale, "other.service") {
 		e.writeFile("stale", "units", name)
 	}
 
-	config := e.writeConfig(baseConfig + dirJob("a", "/srv/repo-a", "/var/www/a") + "retention_prune = 14\n\n" + mysqlJob("b", "b2:bucket:mysql/", "b_db"))
+	// mysql:b and mysql:c share a repository, which is pruned once, every 7 days; the
+	// reopened [mysql:b] section gives both jobs the same prune limits, as required
+	config := e.writeConfig(baseConfig +
+		dirJob("a", "/srv/repo-a", "/var/www/a") + "retention_prune = 14\n\n" +
+		mysqlJob("b", "b2:bucket:mysql/", "b_db") +
+		mysqlJob("c", "b2:bucket:mysql/", "c_db") + "retention_prune = 7\nprune_max_repack_size = 2G\n\n" +
+		"[mysql:b]\nprune_max_repack_size = 2G\n")
 	e.resticara("--config="+config, "gentimer").expect(t, 0, "Systemd timer files written to "+unitDir)
 
 	entries, err := os.ReadDir(unitDir)
@@ -47,15 +55,9 @@ func TestGentimer(t *testing.T) {
 	for _, entry := range entries {
 		files = append(files, entry.Name())
 	}
-	want := []string{
-		"other.service",
-		"resticara-backup.service",
-		"resticara-backup.timer",
-		"resticara-dir-a-prune.service",
-		"resticara-dir-a-prune.timer",
-		"resticara-mysql-b-prune.service",
-		"resticara-mysql-b-prune.timer",
-	}
+	repoA := unitWithPrefix(t, files, "resticara-prune-srv-repo-a-")
+	mysql := unitWithPrefix(t, files, "resticara-prune-b2-bucket-mysql-")
+	want := []string{"other.service", "resticara-backup.service", "resticara-backup.timer", mysql + ".service", mysql + ".timer", repoA + ".service", repoA + ".timer"}
 	if strings.Join(files, " ") != strings.Join(want, " ") {
 		t.Fatalf("unit files:\n%s\nwant:\n%s", strings.Join(files, "\n"), strings.Join(want, "\n"))
 	}
@@ -78,26 +80,36 @@ func TestGentimer(t *testing.T) {
 		"CacheDirectory=resticara",
 	)
 	expectLines(t, "resticara-backup.timer", unit("resticara-backup.timer"), "OnCalendar=daily", "Persistent=true")
-	expectLines(t, "resticara-dir-a-prune.service", unit("resticara-dir-a-prune.service"),
+	expectLines(t, repoA+".service", unit(repoA+".service"),
+		"Description=Resticara prune for /srv/repo-a",
 		"ExecStart="+bin+" --config="+config+" prune /srv/repo-a",
 		"EnvironmentFile=-"+e.path("restic.env"),
 	)
 	// the prune timer must fire on its own: OnUnitActiveSec alone never does
-	expectLines(t, "resticara-dir-a-prune.timer", unit("resticara-dir-a-prune.timer"), "OnActiveSec=1h", "OnUnitActiveSec=14d", "RandomizedDelaySec=1h")
-	expectLines(t, "resticara-mysql-b-prune.timer", unit("resticara-mysql-b-prune.timer"), "OnUnitActiveSec=30d")
-	expectLines(t, "resticara-mysql-b-prune.service", unit("resticara-mysql-b-prune.service"),
+	expectLines(t, repoA+".timer", unit(repoA+".timer"), "OnActiveSec=1h", "OnUnitActiveSec=14d", "RandomizedDelaySec=1h")
+	expectLines(t, mysql+".timer", unit(mysql+".timer"), "OnUnitActiveSec=7d")
+	expectLines(t, mysql+".service", unit(mysql+".service"),
 		"ExecStart="+bin+" --config="+config+" prune b2:bucket:mysql/",
 	)
 
-	checkSystemctlCalls(t, callLog,
-		[]string{
-			"disable --now resticara-dir-a.service",
-			"disable --now resticara-dir-a.timer",
-			"disable --now resticara-dir-old.service",
-			"disable --now resticara-dir-old.timer",
-		},
-		[]string{"resticara-backup.timer", "resticara-dir-a-prune.timer", "resticara-mysql-b-prune.timer"},
-	)
+	var disabled []string
+	for _, base := range []string{"resticara-dir-a", "resticara-dir-a-prune", "resticara-dir-old"} {
+		disabled = append(disabled, "disable --now "+base+".service", "disable --now "+base+".timer")
+	}
+	sort.Strings(disabled)
+	checkSystemctlCalls(t, callLog, disabled, []string{"resticara-backup.timer", mysql + ".timer", repoA + ".timer"})
+}
+
+// unitWithPrefix returns the base name of the unit whose name starts with prefix.
+func unitWithPrefix(t *testing.T, files []string, prefix string) string {
+	t.Helper()
+	for _, f := range files {
+		if strings.HasPrefix(f, prefix) && strings.HasSuffix(f, ".service") {
+			return strings.TrimSuffix(f, ".service")
+		}
+	}
+	t.Fatalf("no unit starting with %s in %v", prefix, files)
+	return ""
 }
 
 func TestGentimerWarnsAboutMissingEnvFile(t *testing.T) {

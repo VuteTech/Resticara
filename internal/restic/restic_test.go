@@ -36,7 +36,9 @@ func TestCommands(t *testing.T) {
 		{"mysql backup ignores excludes", BackupCommand(config.Job{Type: config.JobMySQL, Repository: "/repo", Database: "db", Exclude: config.Exclude{Caches: true}}, ""),
 			Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--stdin-filename", "db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "db"}},
 		{"forget", ForgetCommand(mysql, ""), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "forget", "--keep-daily", "2", "--keep-weekly", "7", "--keep-monthly", "3"}},
-		{"prune", PruneCommand("b2:bucket:mysql/"), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "prune"}},
+		{"prune", PruneCommand(config.Repository{URL: "b2:bucket:mysql/"}), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "prune"}},
+		{"prune with limits", PruneCommand(config.Repository{URL: "/repo", Prune: config.PruneLimits{MaxUnused: "10%", MaxRepackSize: "2G"}}),
+			Command{"restic", "-r", "/repo", "--retry-lock", "30m", "prune", "--max-unused=10%", "--max-repack-size=2G"}},
 	}
 	for _, tt := range tests {
 		if !reflect.DeepEqual(tt.got, tt.want) {

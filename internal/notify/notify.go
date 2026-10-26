@@ -3,6 +3,7 @@ package notify
 
 import (
 	"fmt"
+	"html"
 	"io"
 
 	"resticara/internal/config"
@@ -11,6 +12,18 @@ import (
 	"resticara/notifiers/matrix"
 	"resticara/notifiers/telegram"
 )
+
+// Plain returns messages for a short report without templates: the subject as the
+// headline and the text as preformatted output.
+func Plain(subject, text string) Messages {
+	headline := "<b>❌ " + html.EscapeString(subject) + "</b>"
+	output := "<pre><code>" + html.EscapeString(text) + "</code></pre>"
+	return Messages{
+		Mail:     subject + "\n\n" + text,
+		Matrix:   headline + "<br/>" + output,
+		Telegram: headline + "\n" + output,
+	}
+}
 
 // Messages are the rendered reports per channel.
 type Messages struct {

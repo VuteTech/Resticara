@@ -37,3 +37,42 @@ func TestPruneFailureExitCode(t *testing.T) {
 
 	e.resticara("--config="+config, "prune", "all").expect(t, 1, "Prune failed for "+missing)
 }
+
+func TestPruneLimits(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	repo := e.initRepo("repo")
+	e.writeFile("x", "data", "file.txt")
+	config := e.writeConfig(baseConfig + dirJob("site", repo, e.path("data")) + "prune_max_unused = 10%\nprune_max_repack_size = 1G\n")
+	e.resticara("--config="+config, "run").expect(t, 0, "Status: Backup successful")
+
+	// restic accepts the limits and prunes the repository
+	e.resticara("--config="+config, "prune", repo).expect(t, 0, "Pruning repository "+repo, "unused size after prune")
+}
+
+func TestPruneFailureNotification(t *testing.T) {
+	t.Parallel()
+	matrix := newMatrixServer(t)
+	e := newEnv(t)
+	missing := e.path("not-a-repo")
+	config := e.writeConfig(matrix.config("problems") + dirJob("site", missing, e.path("data")))
+
+	e.resticara("--config="+config, "prune", "all").expect(t, 1, "Prune failed for "+missing, "Matrix message sent!")
+	sent := matrix.sent()
+	if len(sent) != 1 || !strings.Contains(sent[0], "❌ [server-1] PRUNE FAILED: "+missing) || !strings.Contains(sent[0], "<pre><code>Pruning repository "+missing) {
+		t.Errorf("messages = %q", sent)
+	}
+}
+
+func TestPruneSuccessIsQuiet(t *testing.T) {
+	t.Parallel()
+	matrix := newMatrixServer(t)
+	e := newEnv(t)
+	repo := e.initRepo("repo")
+	config := e.writeConfig(matrix.config("always") + dirJob("site", repo, e.path("data")))
+
+	e.resticara("--config="+config, "prune", "all").expect(t, 0, "Pruning repository "+repo)
+	if sent := matrix.sent(); len(sent) != 0 {
+		t.Errorf("a successful prune sent %q", sent)
+	}
+}

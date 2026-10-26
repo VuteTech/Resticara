@@ -25,6 +25,7 @@ import (
 	"log/syslog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"resticara/internal/backup"
@@ -179,16 +180,7 @@ func backupAndReport(cfg config.Config, configPath, customTemplate string, args 
 		return fail("Error: mail_template.txt not found in any of the expected locations")
 	}
 
-	hostID := cfg.General.HostID
-	if hostID == "hostname" {
-		host, err := os.Hostname()
-		if err != nil {
-			fmt.Println("Could not determine hostname, using 'Unknown'")
-			hostID = "Unknown"
-		} else {
-			hostID = host
-		}
-	}
+	host := hostID(cfg)
 
 	started := time.Now()
 	jobs := cfg.Jobs
@@ -209,7 +201,7 @@ func backupAndReport(cfg config.Config, configPath, customTemplate string, args 
 		resticHost = cfg.General.HostID
 	}
 	result := backup.Run(restic.ExecRunner{}, jobs, resticHost, os.Stdout)
-	rep := report.New(hostID, started, result)
+	rep := report.New(host, started, result)
 	exitCode := 0
 	if result.Status == backup.Failure {
 		exitCode = 1
@@ -281,36 +273,60 @@ func runPrune(cfg config.Config, args []string) int {
 
 	repos := cfg.Repositories()
 	if args[0] != "all" {
-		found := false
-		for _, repo := range repos {
-			found = found || repo == args[0]
-		}
-		if !found {
+		repo, ok := cfg.Repository(args[0])
+		if !ok {
 			fmt.Printf("Repository %s not found in config\n", args[0])
 			return 1
 		}
-		repos = []string{args[0]}
+		repos = []config.Repository{repo}
 	}
 
 	return pinged(cfg.Healthcheck.PruneURL, func() (int, string) {
 		var output bytes.Buffer
 		out := io.MultiWriter(os.Stdout, &output)
 		runner := restic.ExecRunner{}
-		exitCode := 0
+		var failed []string
 		for _, repo := range repos {
-			fmt.Fprintf(out, "Pruning repository %s\n", repo)
+			fmt.Fprintf(out, "Pruning repository %s\n", repo.URL)
 			res := runner.Run(restic.PruneCommand(repo))
 			fmt.Fprint(out, res.Stdout)
 			if res.Stderr != "" {
 				fmt.Fprintf(out, "Stderr: %s\n", res.Stderr)
 			}
 			if res.ExitCode != 0 {
-				fmt.Fprintf(out, "Prune failed for %s\n", repo)
-				exitCode = 1
+				fmt.Fprintf(out, "Prune failed for %s\n", repo.URL)
+				failed = append(failed, repo.URL)
 			}
 		}
-		return exitCode, output.String()
+		if len(failed) == 0 {
+			return 0, output.String()
+		}
+
+		// successful prunes stay quiet; failures are reported like failed backups
+		rep := report.Report{
+			Kind:          "Prune",
+			HostID:        hostID(cfg),
+			Date:          time.Now().Format(time.RFC1123),
+			Status:        "failure",
+			StatusMessage: "PRUNE FAILED!",
+		}
+		rep.Subject = fmt.Sprintf("[%s] PRUNE FAILED: %s", rep.HostID, strings.Join(failed, ", "))
+		notify.Default().Send(cfg, rep, notify.Plain(rep.Subject, output.String()), os.Stdout)
+		return 1, output.String()
 	})
+}
+
+// hostID returns the name of this machine for reports.
+func hostID(cfg config.Config) string {
+	if cfg.General.HostID != "hostname" {
+		return cfg.General.HostID
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		fmt.Println("Could not determine hostname, using 'Unknown'")
+		return "Unknown"
+	}
+	return host
 }
 
 // runGentimer installs systemd units that run this binary.
