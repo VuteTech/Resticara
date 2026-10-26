@@ -20,6 +20,7 @@ type Config struct {
 	Matrix      Matrix
 	Telegram    Telegram
 	Healthcheck Healthcheck
+	Systemd     Systemd
 	// Jobs are sorted by Key.
 	Jobs []Job
 	// Warnings are problems that do not stop resticara, such as unknown keys.
@@ -121,6 +122,23 @@ type Healthcheck struct {
 	CheckURL string
 }
 
+// Systemd holds settings for the units created by gentimer.
+type Systemd struct {
+	// Hardening enables the sandbox settings (read-only system and home directories,
+	// private /tmp, no new privileges).
+	Hardening bool
+	// Nice is the CPU priority, from -20 (highest) to 19 (lowest).
+	Nice int
+	// IOSchedulingClass is "best-effort" (at the lowest priority) or "idle".
+	IOSchedulingClass string
+	// BackupTimeout and MaintenanceTimeout (prune and check) are systemd time spans
+	// after which a run is stopped, such as "20h" or "infinity".
+	BackupTimeout      string
+	MaintenanceTimeout string
+	// ReadWritePaths are writable despite the hardening, besides local repositories.
+	ReadWritePaths []string
+}
+
 type JobType string
 
 const (
@@ -182,12 +200,13 @@ var knownKeys = map[string][]string{
 	"matrix":      {"enabled", "server", "username", "pass", "room_id", "access_token"},
 	"telegram":    {"enabled", "bot_token", "chat_id"},
 	"healthcheck": {"url", "prune_url", "check_url"},
+	"systemd":     {"hardening", "nice", "io_scheduling_class", "backup_timeout", "maintenance_timeout", "read_write_paths"},
 	"dir":         append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size", "check_interval", "check_read_data_subset"}, excludeKeys...),
 	"mysql":       {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size", "check_interval", "check_read_data_subset"},
 }
 
 // repeatableKeys may be set more than once in a section, each line adding a value.
-var repeatableKeys = map[string]bool{"directory": true, "exclude": true, "exclude_file": true, "exclude_if_present": true}
+var repeatableKeys = map[string]bool{"directory": true, "exclude": true, "exclude_file": true, "exclude_if_present": true, "read_write_paths": true}
 
 // Load reads and validates the configuration file. Problems that make it unusable
 // are returned together as an *Error.
@@ -286,6 +305,8 @@ func (p *parser) parse(file *ini.File) Config {
 		CheckURL: p.pingURL(healthcheck, "check_url"),
 	}
 
+	cfg.Systemd = p.systemd(file.Section("systemd"))
+
 	p.checkChannels(file, cfg)
 
 	for _, key := range file.Section(ini.DefaultSection).KeyStrings() {
@@ -295,7 +316,7 @@ func (p *parser) parse(file *ini.File) Config {
 	for _, section := range file.Sections() {
 		name := section.Name()
 		switch name {
-		case ini.DefaultSection, "general", "smtp", "matrix", "telegram", "healthcheck":
+		case ini.DefaultSection, "general", "smtp", "matrix", "telegram", "healthcheck", "systemd":
 			continue
 		}
 		jobType, jobName, isJob := strings.Cut(name, ":")
@@ -528,6 +549,53 @@ func (p *parser) pruneLimits(section *ini.Section, base PruneLimits) PruneLimits
 		limits.MaxRepackSize = raw
 	}
 	return limits
+}
+
+// timeSpanPattern matches systemd time spans (systemd.time(7)), such as "20h" or "1d 12h".
+var timeSpanPattern = regexp.MustCompile(`^(infinity|( *[0-9]+(\.[0-9]+)? *(us|usec|ms|msec|s|sec|second|seconds|m|min|minute|minutes|h|hr|hour|hours|d|day|days|w|week|weeks|M|month|months|y|year|years)? *)+)$`)
+
+func (p *parser) systemd(section *ini.Section) Systemd {
+	p.checkKeys(section, "systemd", true)
+	s := Systemd{
+		Hardening:          p.boolean(section, "hardening", true),
+		Nice:               10,
+		IOSchedulingClass:  "best-effort",
+		BackupTimeout:      "20h",
+		MaintenanceTimeout: "12h",
+		ReadWritePaths:     nonEmpty(values(section, "read_write_paths")),
+	}
+	if raw := value(section, "nice"); raw != "" {
+		nice, err := strconv.Atoi(raw)
+		if err != nil || nice < -20 || nice > 19 {
+			p.errorf("'nice' in [systemd] must be an integer from -20 to 19, got %q", raw)
+		}
+		s.Nice = nice
+	}
+	switch raw := value(section, "io_scheduling_class"); raw {
+	case "":
+	case "best-effort", "idle":
+		s.IOSchedulingClass = raw
+	default:
+		p.errorf("'io_scheduling_class' in [systemd] must be best-effort or idle, got %q", raw)
+	}
+	for _, timeout := range []struct {
+		key    string
+		target *string
+	}{{"backup_timeout", &s.BackupTimeout}, {"maintenance_timeout", &s.MaintenanceTimeout}} {
+		key, target := timeout.key, timeout.target
+		if raw := value(section, key); raw != "" {
+			if !timeSpanPattern.MatchString(raw) {
+				p.errorf("'%s' in [systemd] must be a time span such as 20h, 90min or infinity, got %q", key, raw)
+			}
+			*target = raw
+		}
+	}
+	for _, path := range s.ReadWritePaths {
+		if !strings.HasPrefix(path, "/") {
+			p.errorf("'read_write_paths' in [systemd] must be absolute paths, got %q", path)
+		}
+	}
+	return s
 }
 
 // pingURL returns an http(s) URL from the section, or "" when it is not set.

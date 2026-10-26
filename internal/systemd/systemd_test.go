@@ -247,3 +247,56 @@ func TestExecArg(t *testing.T) {
 		}
 	}
 }
+
+var defaults = config.Systemd{Hardening: true, Nice: 10, IOSchedulingClass: "best-effort", BackupTimeout: "20h", MaintenanceTimeout: "12h"}
+
+func TestServiceSettings(t *testing.T) {
+	cfg := config.Config{Systemd: defaults, Jobs: []config.Job{
+		{Key: "dir:a", Repository: "/srv/restic repo"},
+		{Key: "dir:b", Repository: "local:/srv/restic repo"},
+		{Key: "dir:c", Repository: "local:/srv/other"},
+		{Key: "dir:d", Repository: "b2:example-bucket:website/"},
+	}}
+	cfg.Systemd.ReadWritePaths = []string{"/root/.config/rclone"}
+	plan := NewPlan(cfg, "/usr/bin/resticara", "/etc/resticara/config.ini")
+
+	backup := plan.Units[0].Content
+	// every local repository once, then the extra paths; remote repositories need none
+	want := `TimeoutStartSec=20h
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ReadWritePaths="-/srv/restic repo"
+ReadWritePaths=-/srv/other
+ReadWritePaths=-/root/.config/rclone
+`
+	if !strings.Contains(backup, "CacheDirectory=resticara\n"+want) {
+		t.Errorf("backup service:\n%s", backup)
+	}
+
+	// prune and check only write to their own repository
+	for _, unit := range plan.Units {
+		if !strings.HasPrefix(unit.Name, "resticara-prune-b2-") && !strings.HasPrefix(unit.Name, "resticara-check-b2-") || !strings.HasSuffix(unit.Name, ".service") {
+			continue
+		}
+		if !strings.Contains(unit.Content, "TimeoutStartSec=12h\n") || !strings.Contains(unit.Content, "ReadWritePaths=-/root/.config/rclone\n") || strings.Contains(unit.Content, "/srv/") {
+			t.Errorf("%s:\n%s", unit.Name, unit.Content)
+		}
+	}
+}
+
+func TestServiceSettingsOptions(t *testing.T) {
+	s := config.Systemd{Hardening: false, Nice: 5, IOSchedulingClass: "idle", BackupTimeout: "infinity", ReadWritePaths: []string{"/data"}}
+	got := serviceSettings(s, s.BackupTimeout, []string{"/srv/repo"})
+	want := "TimeoutStartSec=infinity\nNice=5\nCPUSchedulingPolicy=batch\nIOSchedulingClass=idle"
+	if got != want {
+		t.Errorf("settings without hardening:\n%s\nwant:\n%s", got, want)
+	}
+}

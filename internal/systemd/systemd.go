@@ -63,7 +63,7 @@ ExecStart=%s
 
 [Install]
 WantedBy=multi-user.target
-`, execStart("run"), serviceEnv)
+`, execStart("run"), serviceEnv+"\n"+serviceSettings(cfg.Systemd, cfg.Systemd.BackupTimeout, localPaths(cfg.Repositories()...)))
 
 	backupTimer := `[Unit]
 Description=Resticara backup timer
@@ -86,6 +86,7 @@ WantedBy=timers.target
 
 	for _, repo := range cfg.Repositories() {
 		base := pruneUnitBase(repo.URL)
+		maintenance := serviceSettings(cfg.Systemd, cfg.Systemd.MaintenanceTimeout, localPaths(repo))
 		pruneService := fmt.Sprintf(`[Unit]
 Description=Resticara prune for %s
 Wants=network-online.target
@@ -98,7 +99,7 @@ ExecStart=%s
 
 [Install]
 WantedBy=multi-user.target
-`, escapeSpecifiers(repo.URL), execStart("prune", repo.URL), serviceEnv)
+`, escapeSpecifiers(repo.URL), execStart("prune", repo.URL), serviceEnv+"\n"+maintenance)
 
 		// OnUnitActiveSec alone never fires because it counts from the last run of the service;
 		// OnActiveSec schedules the first run after the timer is (re)started.
@@ -127,7 +128,7 @@ ExecStart=%s
 
 [Install]
 WantedBy=multi-user.target
-`, escapeSpecifiers(repo.URL), base, execStart("check", repo.URL), serviceEnv)
+`, escapeSpecifiers(repo.URL), base, execStart("check", repo.URL), serviceEnv+"\n"+maintenance)
 
 		// the first check runs some hours after the first prune, so both rarely queue up
 		checkTimer := fmt.Sprintf(`[Unit]
@@ -151,6 +152,53 @@ WantedBy=timers.target
 		plan.Timers = append(plan.Timers, base+".timer", checkBase+".timer")
 	}
 	return plan
+}
+
+// serviceSettings returns the timeout, priority and sandbox settings of a service.
+// writable are the local repositories the service writes to.
+func serviceSettings(s config.Systemd, timeout string, writable []string) string {
+	lines := []string{
+		"TimeoutStartSec=" + timeout,
+		fmt.Sprintf("Nice=%d", s.Nice),
+		"CPUSchedulingPolicy=batch",
+		"IOSchedulingClass=" + s.IOSchedulingClass,
+	}
+	if s.IOSchedulingClass == "best-effort" {
+		lines = append(lines, "IOSchedulingPriority=7")
+	}
+	if s.Hardening {
+		lines = append(lines,
+			"ProtectSystem=strict",
+			"ProtectHome=read-only",
+			"PrivateTmp=yes",
+			"NoNewPrivileges=yes",
+			"ProtectKernelTunables=yes",
+			"ProtectControlGroups=yes",
+		)
+		// restic retries failed writes for a long time, so every local repository must
+		// be writable; "-" ignores paths that do not exist (yet) instead of failing
+		seen := make(map[string]bool)
+		for _, path := range append(writable, s.ReadWritePaths...) {
+			if !seen[path] {
+				seen[path] = true
+				lines = append(lines, "ReadWritePaths="+execArg("-"+path))
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// localPaths returns the directories of the local repositories: "local:/path"
+// or a plain absolute path. Other backends are reached over the network.
+func localPaths(repos ...config.Repository) []string {
+	var paths []string
+	for _, repo := range repos {
+		path := strings.TrimPrefix(repo.URL, "local:")
+		if strings.HasPrefix(path, "/") {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 // pruneUnitBase names the prune units of a repository.
