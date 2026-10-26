@@ -39,6 +39,22 @@ jobs:
         name: resticara-artifacts
         path: resticara
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: stable
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v9
+      with:
+        # update together with .golangci.yml when a release changes the linters
+        version: v2.15.0
+
   integration:
     runs-on: ubuntu-latest
     env:
@@ -72,7 +88,7 @@ jobs:
       run: go test -tags integration -v ./test/integration/...
 
   package:
-    needs: [build, integration]
+    needs: [build, lint, integration]
     runs-on: ubuntu-latest
     env:
       REF_NAME: ${{ github.ref_name }}

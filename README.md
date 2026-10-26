@@ -172,6 +172,7 @@ The `.deb` and `.rpm` packages install `/etc/resticara/config.ini` readable only
 ```
 go test ./...                                     # unit tests
 go test -tags integration ./test/integration/...  # integration tests against real restic repositories
+golangci-lint run ./...                           # linters, configured in .golangci.yml
 ```
 The integration tests build the binary, create local restic repositories in temporary directories and replace `mysqldump` and `systemctl` with stubs. They need restic 0.17 or newer in `PATH` and are skipped without it.
 

@@ -4,6 +4,7 @@ package systemd
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -254,11 +255,11 @@ type Systemctl interface {
 type ExecSystemctl struct{}
 
 func (ExecSystemctl) Output(args ...string) ([]byte, error) {
-	return exec.Command("systemctl", args...).Output()
+	return exec.Command("systemctl", args...).Output() //nolint:gosec // G204: the arguments are unit names from the plan
 }
 
 func (ExecSystemctl) Run(args ...string) error {
-	return exec.Command("systemctl", args...).Run()
+	return exec.Command("systemctl", args...).Run() //nolint:gosec // G204: the arguments are unit names from the plan
 }
 
 // UnitDir returns the directory to write units to: /etc/systemd/system when systemd
@@ -317,13 +318,19 @@ func Apply(sys Systemctl, unitDir string, plan Plan) error {
 	}
 	sort.Strings(stale)
 	for _, base := range stale {
-		sys.Run("disable", "--now", base+".timer")
-		sys.Run("disable", "--now", base+".service")
-		os.Remove(filepath.Join(unitDir, base+".timer"))
-		os.Remove(filepath.Join(unitDir, base+".service"))
+		// a stale unit is often not loaded anymore, so failing to disable it is fine;
+		// failing to remove its file is not, as it would stay installed
+		_ = sys.Run("disable", "--now", base+".timer")
+		_ = sys.Run("disable", "--now", base+".service")
+		for _, name := range []string{base + ".timer", base + ".service"} {
+			if err := os.Remove(filepath.Join(unitDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("removing stale unit: %w", err)
+			}
+		}
 	}
 
 	for _, unit := range plan.Units {
+		//nolint:gosec // G306: systemd unit files are world-readable
 		if err := os.WriteFile(filepath.Join(unitDir, unit.Name), []byte(unit.Content), 0644); err != nil {
 			return err
 		}

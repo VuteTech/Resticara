@@ -28,7 +28,7 @@ func EnvFilePath(configPath string) string {
 // KEY=VALUE lines, optionally quoted values, and comments starting with # or ;.
 // It returns warnings for lines it cannot read.
 func LoadEnvFile(path string) ([]string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: the env file next to the config the admin chose
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -55,7 +55,9 @@ func LoadEnvFile(path string) ([]string, error) {
 			val = val[1 : len(val)-1]
 		}
 		if _, set := os.LookupEnv(key); !set {
-			os.Setenv(key, val)
+			if err := os.Setenv(key, val); err != nil {
+				return warnings, fmt.Errorf("setting %s from line %d of %s: %w", key, n, path, err)
+			}
 		}
 	}
 	return warnings, scanner.Err()

@@ -172,7 +172,7 @@ func (ExecRunner) Run(c Command) Result {
 		return Result{ExitCode: -1, Stderr: "empty command"}
 	}
 
-	cmd := exec.Command(c[0], c[1:]...)
+	cmd := exec.Command(c[0], c[1:]...) //nolint:gosec // G204: running restic with arguments from the config is the purpose of resticara
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
