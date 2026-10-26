@@ -16,9 +16,11 @@ You should have received a copy of the GNU General Public License along with Foo
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"log/syslog"
 	"os"
@@ -31,6 +33,7 @@ import (
 	"resticara/internal/report"
 	"resticara/internal/restic"
 	"resticara/internal/systemd"
+	"resticara/notifiers/healthcheck"
 )
 
 func main() {
@@ -132,12 +135,48 @@ func runValidate(cfg config.Config, configPath string) int {
 	return 0
 }
 
-// runBackup runs all jobs, or the one named in args, and sends the report.
+// pinged runs fn between the start and end pings of the Healthchecks check at url,
+// sending fn's exit code and report. A failed ping is reported and makes the exit
+// code 1. Without a url, fn just runs.
+func pinged(url string, fn func() (int, string)) int {
+	if url == "" {
+		code, _ := fn()
+		return code
+	}
+	pinger := healthcheck.New(url)
+	startErr := pinger.Start()
+	if startErr != nil {
+		fmt.Println("Warning: " + startErr.Error())
+	}
+	code, body := fn()
+	if err := pinger.Finish(code, body); err != nil {
+		fmt.Println("Warning: " + err.Error())
+		return 1
+	}
+	if startErr != nil {
+		return 1
+	}
+	return code
+}
+
+// runBackup runs all jobs, or the one named in args, and sends the report. Only
+// full runs ping the healthcheck, so a manual run of one job does not hide a
+// missing scheduled run.
 func runBackup(cfg config.Config, configPath, customTemplate string, args []string, logwriter *syslog.Writer) int {
+	url := cfg.Healthcheck.URL
+	if len(args) > 0 {
+		url = ""
+	}
+	return pinged(url, func() (int, string) {
+		return backupAndReport(cfg, configPath, customTemplate, args, logwriter)
+	})
+}
+
+// backupAndReport returns the exit code and the report text for the healthcheck.
+func backupAndReport(cfg config.Config, configPath, customTemplate string, args []string, logwriter *syslog.Writer) (int, string) {
 	templatePath := config.Find(customTemplate, report.TemplateLocations(configPath, "mail_template.txt"))
 	if templatePath == "" {
-		fmt.Println("Error: mail_template.txt not found in any of the expected locations")
-		return 1
+		return fail("Error: mail_template.txt not found in any of the expected locations")
 	}
 
 	hostID := cfg.General.HostID
@@ -156,8 +195,7 @@ func runBackup(cfg config.Config, configPath, customTemplate string, args []stri
 	if len(args) > 0 {
 		job, ok := cfg.Job(args[0])
 		if !ok {
-			fmt.Printf("Command %s not found in config\n", args[0])
-			return 1
+			return fail(fmt.Sprintf("Command %s not found in config", args[0]))
 		}
 		jobs = []config.Job{job}
 	}
@@ -177,9 +215,9 @@ func runBackup(cfg config.Config, configPath, customTemplate string, args []stri
 		exitCode = 1
 	}
 
-	messages, ok := renderMessages(cfg, configPath, templatePath, rep)
-	if !ok {
-		return 1
+	messages, err := renderMessages(cfg, configPath, templatePath, rep)
+	if err != nil {
+		return fail(err.Error())
 	}
 
 	report.Log(logwriter, rep)
@@ -187,49 +225,51 @@ func runBackup(cfg config.Config, configPath, customTemplate string, args []stri
 
 	if cfg.General.Notify == config.NotifyProblems && result.Status == backup.Success {
 		fmt.Println("Backup successful, not sending notifications (notify = problems).")
-		return exitCode
+		return exitCode, messages.Mail
 	}
 	if !notify.Default().Send(cfg, rep, messages, os.Stdout) {
 		exitCode = 1
 	}
-	return exitCode
+	return exitCode, messages.Mail
+}
+
+// fail prints the message and returns it as a failed run's report.
+func fail(message string) (int, string) {
+	fmt.Println(message)
+	return 1, message
 }
 
 // renderMessages renders the report for email and for the enabled chat channels.
-func renderMessages(cfg config.Config, configPath, mailTemplatePath string, rep report.Report) (notify.Messages, bool) {
+// The error is the complete message to print.
+func renderMessages(cfg config.Config, configPath, mailTemplatePath string, rep report.Report) (notify.Messages, error) {
 	var messages notify.Messages
 	var err error
 
 	if messages.Mail, err = report.RenderText(mailTemplatePath, "", rep); err != nil {
-		fmt.Println("Error " + err.Error())
-		return messages, false
+		return messages, errors.New("Error " + err.Error())
 	}
 
 	if cfg.Matrix.Enabled {
 		path := config.Find("", report.TemplateLocations(configPath, "matrix_template.html"))
 		if path == "" {
-			fmt.Println("Error: matrix_template.html not found in any of the expected locations")
-			return messages, false
+			return messages, errors.New("Error: matrix_template.html not found in any of the expected locations")
 		}
 		if messages.Matrix, err = report.RenderHTML(path, "matrix", rep); err != nil {
-			fmt.Println("Error " + err.Error())
-			return messages, false
+			return messages, errors.New("Error " + err.Error())
 		}
 	}
 
 	if cfg.Telegram.Enabled {
 		path := config.Find("", report.TemplateLocations(configPath, "telegram_template.html"))
 		if path == "" {
-			fmt.Println("Error: telegram_template.html not found in any of the expected locations")
-			return messages, false
+			return messages, errors.New("Error: telegram_template.html not found in any of the expected locations")
 		}
 		if messages.Telegram, err = report.RenderHTML(path, "telegram", rep); err != nil {
-			fmt.Println("Error " + err.Error())
-			return messages, false
+			return messages, errors.New("Error " + err.Error())
 		}
 	}
 
-	return messages, true
+	return messages, nil
 }
 
 // runPrune prunes all repositories, or the one named in args.
@@ -252,21 +292,25 @@ func runPrune(cfg config.Config, args []string) int {
 		repos = []string{args[0]}
 	}
 
-	runner := restic.ExecRunner{}
-	exitCode := 0
-	for _, repo := range repos {
-		fmt.Printf("Pruning repository %s\n", repo)
-		res := runner.Run(restic.PruneCommand(repo))
-		fmt.Print(res.Stdout)
-		if res.Stderr != "" {
-			fmt.Printf("Stderr: %s\n", res.Stderr)
+	return pinged(cfg.Healthcheck.PruneURL, func() (int, string) {
+		var output bytes.Buffer
+		out := io.MultiWriter(os.Stdout, &output)
+		runner := restic.ExecRunner{}
+		exitCode := 0
+		for _, repo := range repos {
+			fmt.Fprintf(out, "Pruning repository %s\n", repo)
+			res := runner.Run(restic.PruneCommand(repo))
+			fmt.Fprint(out, res.Stdout)
+			if res.Stderr != "" {
+				fmt.Fprintf(out, "Stderr: %s\n", res.Stderr)
+			}
+			if res.ExitCode != 0 {
+				fmt.Fprintf(out, "Prune failed for %s\n", repo)
+				exitCode = 1
+			}
 		}
-		if res.ExitCode != 0 {
-			fmt.Printf("Prune failed for %s\n", repo)
-			exitCode = 1
-		}
-	}
-	return exitCode
+		return exitCode, output.String()
+	})
 }
 
 // runGentimer installs systemd units that run this binary.

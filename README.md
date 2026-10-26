@@ -77,6 +77,19 @@ To get notifications only when something needs attention, set `notify = problems
 
 Customized templates keep working. Besides the existing fields, templates can use `.Subject`, `.Status` (`success`, `warning` or `failure`) and, per entry of `.Commands`, `.Status`, `.StatusLabel` and `.Duration`.
 
+## Monitoring with Healthchecks
+Notifications only arrive when resticara runs. To also get an alert when backups stop running (server down, broken timer, missing credentials), add a [Healthchecks](https://healthchecks.io) check (hosted or self-hosted) to the config:
+
+```
+[healthcheck]
+url = https://hc-ping.com/<uuid>
+prune_url = https://hc-ping.com/<another uuid>
+```
+
+A full backup run (`resticara run`, as started by the timer) pings `url` when it starts and again when it ends, with its exit code and the report, so Healthchecks shows how long it took and alerts on failures and on runs that never happen. Set the check's period to one day and the grace time to longer than the backups take. Runs of a single job (`resticara run dir:website`) do not ping, so they cannot hide a missing scheduled run. Prune runs ping `prune_url`; set that check's period to the prune interval.
+
+Slug URLs (`https://hc-ping.com/<ping-key>/<slug>`) work as well. If a ping fails, the backup still runs, but resticara exits with an error.
+
 ## Pruning repositories
 Use the prune command to remove unneeded data from configured restic repositories.
 

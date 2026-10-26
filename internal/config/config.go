@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"sort"
@@ -13,10 +14,11 @@ import (
 )
 
 type Config struct {
-	General  General
-	SMTP     SMTP
-	Matrix   Matrix
-	Telegram Telegram
+	General     General
+	SMTP        SMTP
+	Matrix      Matrix
+	Telegram    Telegram
+	Healthcheck Healthcheck
 	// Jobs are sorted by Key.
 	Jobs []Job
 	// Warnings are problems that do not stop resticara, such as unknown keys.
@@ -81,6 +83,14 @@ type Telegram struct {
 	ChatID   int64
 }
 
+// Healthcheck holds the ping URLs of Healthchecks checks; empty URLs are not pinged.
+type Healthcheck struct {
+	// URL is pinged by backup runs.
+	URL string
+	// PruneURL is pinged by prune runs.
+	PruneURL string
+}
+
 type JobType string
 
 const (
@@ -130,12 +140,13 @@ func (e *Error) Error() string {
 var excludeKeys = []string{"exclude", "exclude_file", "exclude_caches", "exclude_if_present"}
 
 var knownKeys = map[string][]string{
-	"general":  append([]string{"hostID", "retention_prune", "notify"}, excludeKeys...),
-	"smtp":     {"enabled", "from", "username", "pass", "to", "server", "port"},
-	"matrix":   {"enabled", "server", "username", "pass", "room_id", "access_token"},
-	"telegram": {"enabled", "bot_token", "chat_id"},
-	"dir":      append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"}, excludeKeys...),
-	"mysql":    {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"},
+	"general":     append([]string{"hostID", "retention_prune", "notify"}, excludeKeys...),
+	"smtp":        {"enabled", "from", "username", "pass", "to", "server", "port"},
+	"matrix":      {"enabled", "server", "username", "pass", "room_id", "access_token"},
+	"telegram":    {"enabled", "bot_token", "chat_id"},
+	"healthcheck": {"url", "prune_url"},
+	"dir":         append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"}, excludeKeys...),
+	"mysql":       {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"},
 }
 
 // repeatableKeys may be set more than once in a section, each line adding a value.
@@ -227,6 +238,13 @@ func (p *parser) parse(file *ini.File) Config {
 		cfg.Telegram.ChatID = chatID
 	}
 
+	healthcheck := file.Section("healthcheck")
+	p.checkKeys(healthcheck, "healthcheck", true)
+	cfg.Healthcheck = Healthcheck{
+		URL:      p.pingURL(healthcheck, "url"),
+		PruneURL: p.pingURL(healthcheck, "prune_url"),
+	}
+
 	p.checkChannels(file, cfg)
 
 	for _, key := range file.Section(ini.DefaultSection).KeyStrings() {
@@ -236,7 +254,7 @@ func (p *parser) parse(file *ini.File) Config {
 	for _, section := range file.Sections() {
 		name := section.Name()
 		switch name {
-		case ini.DefaultSection, "general", "smtp", "matrix", "telegram":
+		case ini.DefaultSection, "general", "smtp", "matrix", "telegram", "healthcheck":
 			continue
 		}
 		jobType, jobName, isJob := strings.Cut(name, ":")
@@ -401,6 +419,20 @@ func (p *parser) boolean(section *ini.Section, key string, defaultValue bool) bo
 	}
 	p.errorf("'%s' in [%s] must be true or false, got %q", key, section.Name(), raw)
 	return defaultValue
+}
+
+// pingURL returns an http(s) URL from the section, or "" when it is not set.
+func (p *parser) pingURL(section *ini.Section, key string) string {
+	raw := value(section, key)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		p.errorf("'%s' in [%s] must be an http or https URL, got %q", key, section.Name(), raw)
+		return ""
+	}
+	return raw
 }
 
 // checkChannels warns about enabled notification channels that cannot work. These
