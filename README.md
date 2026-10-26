@@ -17,7 +17,7 @@ Resticara is a wrapper around [Restic](https://restic.net/), designed to simplif
  * Systemd Timer Generation: Create and activate systemd timers with `resticara gentimer`.
 
 ## Installation
-Download the latest version from the [Releases](https://github.com/VuteTech/Resticara/releases) page. Every release has `deb` and `rpm` packages and `.tar.gz` archives for `x86_64` and `aarch64`, and a `SHA256SUMS` file to verify the downloads:
+Download the latest version from the [Releases](https://github.com/VuteTech/Resticara/releases) page. Every release has `deb` and `rpm` packages and `.tar.gz` archives for `x86_64`, `aarch64` and `ppc64le`, and a `SHA256SUMS` file to verify the downloads:
 
 ```
 sha256sum --check --ignore-missing SHA256SUMS

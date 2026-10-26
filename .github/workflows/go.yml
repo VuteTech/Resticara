@@ -55,7 +55,7 @@ jobs:
         CGO_ENABLED: 0
         GOOS: linux
       run: |
-        for arch in amd64 arm64; do
+        for arch in amd64 arm64 ppc64le; do
           GOARCH=$arch go build -v -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "dist/resticara-linux-$arch" .
         done
         dist/resticara-linux-amd64 --version
@@ -138,10 +138,13 @@ jobs:
         VERSION="$(cat dist/VERSION)"
         LABEL="$(cat dist/LABEL)"
         mkdir -p build release
-        for arch in amd64 arm64; do
+        # file names use the rpm architecture names; nfpm sets each format's own
+        # architecture inside the package (amd64, arm64 and ppc64el for deb)
+        for arch in amd64 arm64 ppc64le; do
           case "$arch" in
             amd64) name=x86_64 ;;
             arm64) name=aarch64 ;;
+            ppc64le) name=ppc64le ;;
           esac
           install -m 0755 "dist/resticara-linux-$arch" build/resticara
           GOARCH=$arch VERSION=$VERSION nfpm package --packager deb --target "release/resticara-$LABEL.$name.deb"
