@@ -90,6 +90,8 @@ func realMain() int {
 		return runValidate(cfg, configPath)
 	case "prune":
 		return runPrune(cfg, args[1:])
+	case "check":
+		return runCheck(cfg, args[1:])
 	case "gentimer":
 		return runGentimer(cfg, configPath)
 	default:
@@ -104,6 +106,7 @@ func printUsage() {
 	fmt.Println("  --mail_template=: Specify a custom mail template file path")
 	fmt.Println("  run [command]   : Run backups (all or specific command)")
 	fmt.Println("  prune <all|repository> : Prune restic repositories")
+	fmt.Println("  check <all|repository> : Verify restic repositories")
 	fmt.Println("  gentimer        : Generate systemd service and timer files")
 	fmt.Println("  validate        : Check the configuration and the backed up directories")
 }
@@ -264,10 +267,30 @@ func renderMessages(cfg config.Config, configPath, mailTemplatePath string, rep 
 	return messages, nil
 }
 
+// maintenance is a command that runs once per repository, such as prune or check.
+type maintenance struct {
+	name    string // "prune"
+	doing   string // "Pruning"
+	failed  string // "Prune"
+	url     string // healthcheck ping URL
+	command func(config.Repository) restic.Command
+}
+
 // runPrune prunes all repositories, or the one named in args.
 func runPrune(cfg config.Config, args []string) int {
+	return runMaintenance(cfg, args, maintenance{"prune", "Pruning", "Prune", cfg.Healthcheck.PruneURL, restic.PruneCommand})
+}
+
+// runCheck verifies all repositories, or the one named in args.
+func runCheck(cfg config.Config, args []string) int {
+	return runMaintenance(cfg, args, maintenance{"check", "Checking", "Check", cfg.Healthcheck.CheckURL, restic.CheckCommand})
+}
+
+// runMaintenance runs m on all repositories, or the one named in args. Failures are
+// reported through the notification channels; successful runs stay quiet.
+func runMaintenance(cfg config.Config, args []string, m maintenance) int {
 	if len(args) < 1 {
-		fmt.Println("Usage: resticara prune <all|repository>")
+		fmt.Printf("Usage: resticara %s <all|repository>\n", m.name)
 		return 2
 	}
 
@@ -281,20 +304,20 @@ func runPrune(cfg config.Config, args []string) int {
 		repos = []config.Repository{repo}
 	}
 
-	return pinged(cfg.Healthcheck.PruneURL, func() (int, string) {
+	return pinged(m.url, func() (int, string) {
 		var output bytes.Buffer
 		out := io.MultiWriter(os.Stdout, &output)
 		runner := restic.ExecRunner{}
 		var failed []string
 		for _, repo := range repos {
-			fmt.Fprintf(out, "Pruning repository %s\n", repo.URL)
-			res := runner.Run(restic.PruneCommand(repo))
+			fmt.Fprintf(out, "%s repository %s\n", m.doing, repo.URL)
+			res := runner.Run(m.command(repo))
 			fmt.Fprint(out, res.Stdout)
 			if res.Stderr != "" {
 				fmt.Fprintf(out, "Stderr: %s\n", res.Stderr)
 			}
 			if res.ExitCode != 0 {
-				fmt.Fprintf(out, "Prune failed for %s\n", repo.URL)
+				fmt.Fprintf(out, "%s failed for %s\n", m.failed, repo.URL)
 				failed = append(failed, repo.URL)
 			}
 		}
@@ -302,15 +325,15 @@ func runPrune(cfg config.Config, args []string) int {
 			return 0, output.String()
 		}
 
-		// successful prunes stay quiet; failures are reported like failed backups
+		label := strings.ToUpper(m.failed) + " FAILED"
 		rep := report.Report{
-			Kind:          "Prune",
+			Kind:          m.failed,
 			HostID:        hostID(cfg),
 			Date:          time.Now().Format(time.RFC1123),
 			Status:        "failure",
-			StatusMessage: "PRUNE FAILED!",
+			StatusMessage: label + "!",
 		}
-		rep.Subject = fmt.Sprintf("[%s] PRUNE FAILED: %s", rep.HostID, strings.Join(failed, ", "))
+		rep.Subject = fmt.Sprintf("[%s] %s: %s", rep.HostID, label, strings.Join(failed, ", "))
 		notify.Default().Send(cfg, rep, notify.Plain(rep.Subject, output.String()), os.Stdout)
 		return 1, output.String()
 	})

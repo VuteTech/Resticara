@@ -35,6 +35,8 @@ func TestCommands(t *testing.T) {
 		// excludes are only for directories, a mysql job never gets them
 		{"mysql backup ignores excludes", BackupCommand(config.Job{Type: config.JobMySQL, Repository: "/repo", Database: "db", Exclude: config.Exclude{Caches: true}}, ""),
 			Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--stdin-filename", "db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "db"}},
+		{"check", CheckCommand(config.Repository{URL: "/repo", CheckSubset: "5%"}), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "check", "--read-data-subset=5%"}},
+		{"check structure only", CheckCommand(config.Repository{URL: "/repo", CheckSubset: "none"}), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "check"}},
 		{"forget", ForgetCommand(mysql, ""), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "forget", "--keep-daily", "2", "--keep-weekly", "7", "--keep-monthly", "3"}},
 		{"prune", PruneCommand(config.Repository{URL: "b2:bucket:mysql/"}), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "prune"}},
 		{"prune with limits", PruneCommand(config.Repository{URL: "/repo", Prune: config.PruneLimits{MaxUnused: "10%", MaxRepackSize: "2G"}}),

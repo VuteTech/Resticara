@@ -84,9 +84,10 @@ Notifications only arrive when resticara runs. To also get an alert when backups
 [healthcheck]
 url = https://hc-ping.com/<uuid>
 prune_url = https://hc-ping.com/<another uuid>
+check_url = https://hc-ping.com/<a third uuid>
 ```
 
-A full backup run (`resticara run`, as started by the timer) pings `url` when it starts and again when it ends, with its exit code and the report, so Healthchecks shows how long it took and alerts on failures and on runs that never happen. Set the check's period to one day and the grace time to longer than the backups take. Runs of a single job (`resticara run dir:website`) do not ping, so they cannot hide a missing scheduled run. Prune runs ping `prune_url`; set that check's period to the prune interval.
+A full backup run (`resticara run`, as started by the timer) pings `url` when it starts and again when it ends, with its exit code and the report, so Healthchecks shows how long it took and alerts on failures and on runs that never happen. Set the check's period to one day and the grace time to longer than the backups take. Runs of a single job (`resticara run dir:website`) do not ping, so they cannot hide a missing scheduled run. Prune runs ping `prune_url` and repository checks ping `check_url`; set those checks' periods to the prune and check intervals.
 
 Slug URLs (`https://hc-ping.com/<ping-key>/<slug>`) work as well. If a ping fails, the backup still runs, but resticara exits with an error.
 
@@ -105,8 +106,23 @@ Pruning rewrites data, which costs time and, on B2 or S3, transactions. Two opti
 
 Jobs that back up to the same repository must use the same limits, since the repository is pruned once for all of them. A failed prune is reported through the enabled notification channels; successful prunes are not, use `prune_url` under `[healthcheck]` to monitor them.
 
+## Checking repositories
+`resticara check <all|repository>` runs `restic check`, which verifies the repository structure and reads a part of the stored data to find damaged files, so a broken repository is noticed before a restore is needed.
+
+```
+resticara check all
+resticara check b2:bucket:wpsites/
+```
+
+`gentimer` schedules a check per repository every 30 days. Two optional keys, in `[general]` or in a job section, change this:
+
+* `check_interval`: days between checks.
+* `check_read_data_subset`: how much data each check reads, as a percentage (default `5%`, a different random part each time, so repeated checks cover the whole repository) or a size such as `10G`; `none` only checks the structure. Reading data downloads it, which may cost egress fees with some storage providers.
+
+A failed check is always reported through the enabled notification channels; use `check_url` under `[healthcheck]` to monitor that checks keep running. A check needs an exclusive lock, so the check service waits for a running backup or prune of the same repository.
+
 ## Generating systemd timers
-Run `resticara gentimer` as root to generate systemd service and timer files that run the `resticara` binary used for the command, writing them to the systemd unit directory. A single daily `resticara-backup.timer` runs all configured backups one after another and sends one report, and each repository gets one prune timer (`resticara-prune-<repository>-<hash>.timer`), however many jobs back up to it. Existing timers are restarted to pick up changes and any timers without a matching configuration, including the per-job prune timers of older versions, are disabled and removed. Prune timers first run an hour after they are started and then every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup); a repository used by several jobs is pruned as often as the most frequent of them asks for.
+Run `resticara gentimer` as root to generate systemd service and timer files that run the `resticara` binary used for the command, writing them to the systemd unit directory. A single daily `resticara-backup.timer` runs all configured backups one after another and sends one report, and each repository gets one prune timer (`resticara-prune-<repository>-<hash>.timer`) and one check timer (`resticara-check-<repository>-<hash>.timer`), however many jobs back up to it. The first check runs six hours after `gentimer`, the first prune after one hour. Existing timers are restarted to pick up changes and any timers without a matching configuration, including the per-job prune timers of older versions, are disabled and removed. Prune timers first run an hour after they are started and then every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup); a repository used by several jobs is pruned as often as the most frequent of them asks for.
 
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.

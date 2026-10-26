@@ -106,6 +106,16 @@ func ForgetCommand(job config.Job, host string) Command {
 		"--keep-monthly", strconv.Itoa(job.Retention.Monthly))
 }
 
+// CheckCommand returns the restic command that verifies a repository, reading the
+// repository's check subset of the data.
+func CheckCommand(repo config.Repository) Command {
+	cmd := append(base(repo.URL), "check")
+	if repo.CheckSubset != "" && repo.CheckSubset != "none" {
+		cmd = append(cmd, "--read-data-subset="+repo.CheckSubset)
+	}
+	return cmd
+}
+
 // SnapshotsCommand lists the snapshots of a repository as JSON.
 func SnapshotsCommand(repository string) Command {
 	return append(base(repository), "snapshots", "--json")

@@ -57,7 +57,11 @@ func TestNewPlanGolden(t *testing.T) {
 		t.Errorf("rendered %v, testdata has %v", names, golden)
 	}
 
-	wantTimers := []string{"resticara-backup.timer", "resticara-prune-b2-example-bucket-mysql-98315465.timer", "resticara-prune-b2-example-bucket-website-f9d2ac99.timer"}
+	wantTimers := []string{
+		"resticara-backup.timer",
+		"resticara-prune-b2-example-bucket-mysql-98315465.timer", "resticara-check-b2-example-bucket-mysql-98315465.timer",
+		"resticara-prune-b2-example-bucket-website-f9d2ac99.timer", "resticara-check-b2-example-bucket-website-f9d2ac99.timer",
+	}
 	if strings.Join(plan.Timers, " ") != strings.Join(wantTimers, " ") {
 		t.Errorf("Timers = %v", plan.Timers)
 	}
@@ -190,18 +194,22 @@ func TestGenerate(t *testing.T) {
 
 func TestPlanSharedRepository(t *testing.T) {
 	cfg := config.Config{Jobs: []config.Job{
-		{Key: "dir:a", Repository: "/srv/repo", PruneDays: 30},
-		{Key: "mysql:b", Repository: "/srv/repo", PruneDays: 7},
+		{Key: "dir:a", Repository: "/srv/repo", PruneDays: 30, CheckDays: 14},
+		{Key: "mysql:b", Repository: "/srv/repo", PruneDays: 7, CheckDays: 60},
 	}}
 	plan := NewPlan(cfg, "/usr/bin/resticara", "/etc/resticara/config.ini")
 
-	// one prune per repository, as often as the most frequent job asks for
-	base := pruneUnitBase("/srv/repo")
-	if len(plan.Units) != 4 || strings.Join(plan.Timers, " ") != "resticara-backup.timer "+base+".timer" {
+	// one prune and one check per repository, as often as the most frequent job asks for
+	prune, check := pruneUnitBase("/srv/repo"), checkUnitBase("/srv/repo")
+	if len(plan.Units) != 6 || strings.Join(plan.Timers, " ") != "resticara-backup.timer "+prune+".timer "+check+".timer" {
 		t.Fatalf("units %d, timers %v", len(plan.Units), plan.Timers)
 	}
-	if !strings.Contains(plan.Units[3].Content, "OnUnitActiveSec=7d\n") {
-		t.Errorf("prune timer:\n%s", plan.Units[3].Content)
+	if !strings.Contains(plan.Units[3].Content, "OnUnitActiveSec=7d\n") || !strings.Contains(plan.Units[5].Content, "OnUnitActiveSec=14d\n") {
+		t.Errorf("timers:\n%s\n%s", plan.Units[3].Content, plan.Units[5].Content)
+	}
+	// the check waits for a running backup or prune of the repository
+	if !strings.Contains(plan.Units[4].Content, "After=network-online.target resticara-backup.service "+prune+".service\n") {
+		t.Errorf("check service:\n%s", plan.Units[4].Content)
 	}
 }
 

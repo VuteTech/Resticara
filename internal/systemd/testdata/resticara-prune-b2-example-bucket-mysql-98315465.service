@@ -1,7 +1,7 @@
 [Unit]
 Description=Resticara prune for b2:example-bucket:mysql/
 Wants=network-online.target
-After=network-online.target
+After=network-online.target resticara-backup.service
 
 [Service]
 Type=oneshot
