@@ -67,6 +67,7 @@ type Config struct {
 	MatrixUser      string
 	MatrixPass      string
 	MatrixRoomID    string
+	MatrixToken     string
 	TelegramEnabled bool
 	TelegramToken   string
 	TelegramChatID  int64
@@ -115,6 +116,7 @@ func readConfig(file string) (Config, error) {
 	config.MatrixUser = cfg.Section("matrix").Key("username").String()
 	config.MatrixPass = cfg.Section("matrix").Key("pass").String()
 	config.MatrixRoomID = cfg.Section("matrix").Key("room_id").String()
+	config.MatrixToken = cfg.Section("matrix").Key("access_token").String()
 
 	config.TelegramEnabled = cfg.Section("telegram").Key("enabled").MustBool(false)
 	config.TelegramToken = cfg.Section("telegram").Key("bot_token").String()
@@ -187,6 +189,17 @@ func templateLocations(configPath, name string) []string {
 		filepath.Join(filepath.Dir(configPath), "templates", name),
 		filepath.Join("/etc/resticara/templates", name),
 		filepath.Join(os.Getenv("HOME"), ".config/resticara", name),
+	}
+}
+
+// warnIfAccessibleByOthers warns when a file holding credentials can be read by other users.
+func warnIfAccessibleByOthers(path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		fmt.Printf("Warning: %s contains credentials but has mode %04o; restrict it with: chmod 600 %s\n", path, perm, path)
 	}
 }
 
@@ -287,6 +300,13 @@ func generateTimers(config Config, configPath string) error {
 	if err != nil {
 		return err
 	}
+	binary, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if binary, err = filepath.EvalSymlinks(binary); err != nil {
+		return err
+	}
 	// restic credentials (RESTIC_PASSWORD, B2_ACCOUNT_ID, B2_ACCOUNT_KEY, ...) are read from this file
 	envFile := filepath.Join(filepath.Dir(configPath), "restic.env")
 	serviceEnv := fmt.Sprintf(`EnvironmentFile=-%s
@@ -382,12 +402,12 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/resticara --config=%s run
+ExecStart=%s --config=%s run
 %s
 
 [Install]
 WantedBy=multi-user.target
-`, configPath, serviceEnv)
+`, binary, configPath, serviceEnv)
 
 	backupTimer := `[Unit]
 Description=Resticara backup timer
@@ -416,12 +436,12 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/resticara --config=%s prune %s
+ExecStart=%s --config=%s prune %s
 %s
 
 [Install]
 WantedBy=multi-user.target
-`, u.commandKey, configPath, u.bucket, serviceEnv)
+`, u.commandKey, binary, configPath, u.bucket, serviceEnv)
 
 		// OnUnitActiveSec alone never fires because it counts from the last run of the service;
 		// OnActiveSec schedules the first run after the timer is (re)started.
@@ -461,6 +481,8 @@ WantedBy=timers.target
 	fmt.Printf("Systemd timer files written to %s and activated.\n", unitDir)
 	if _, err := os.Stat(envFile); err != nil {
 		fmt.Printf("Warning: %s not found; restic credentials (RESTIC_PASSWORD, B2_ACCOUNT_ID, B2_ACCOUNT_KEY) must be set there for the timers to work.\n", envFile)
+	} else {
+		warnIfAccessibleByOthers(envFile)
 	}
 	return nil
 }
@@ -503,6 +525,8 @@ func realMain() int {
 		fmt.Println("Error: config.ini not found in any of the expected locations")
 		return 1
 	}
+
+	warnIfAccessibleByOthers(configPath)
 
 	config, err := readConfig(configPath)
 	if err != nil {
@@ -666,14 +690,15 @@ func realMain() int {
 		}
 
 		if config.MatrixEnabled {
-			matrixNotifier := matrix.GomatrixNotifier{}
+			matrixNotifier := matrix.ClientAPINotifier{}
 			message := matrixMessageBuffer.String()
 			matrixConfig := matrix.MatrixConfig{
-				Homeserver: config.MatrixServer,
-				Username:   config.MatrixUser,
-				Password:   config.MatrixPass,
-				RoomID:     config.MatrixRoomID,
-				Message:    message,
+				Homeserver:  config.MatrixServer,
+				Username:    config.MatrixUser,
+				Password:    config.MatrixPass,
+				RoomID:      config.MatrixRoomID,
+				AccessToken: config.MatrixToken,
+				Message:     message,
 			}
 
 			if err := matrixNotifier.Send(matrixConfig); err != nil {

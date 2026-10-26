@@ -14,12 +14,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
 
     - name: Setup Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v7
       with:
-        go-version: '1.20'
+        # always build with the latest Go release so binaries get standard library security fixes
+        go-version: stable
+
+    - name: Vet
+      run: go vet ./...
 
     - name: Build
       env:
@@ -30,7 +34,7 @@ jobs:
       run: go test -v ./...
 
     - name: Upload binary build artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: resticara-artifacts
         path: resticara
@@ -38,102 +42,101 @@ jobs:
   package:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      REF_NAME: ${{ github.ref_name }}
+      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+      RUN_NUMBER: ${{ github.run_number }}
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/download-artifact@v5
+    - uses: actions/checkout@v7
+    - uses: actions/download-artifact@v8
       with:
         name: resticara-artifacts
 
-    - name: Install dpkg-dev
-      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev rpm
+    - name: Install packaging tools
+      run: sudo apt-get -y update && sudo apt-get -y install dpkg-dev rpm zip
 
-    - name: Prepare Debian Package Structure
+    - name: Set version
       run: |
-        if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION:1}"
+        if [[ "$IS_TAG" == "true" ]]; then
+          echo "VERSION=${REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "LABEL=$REF_NAME" >> "$GITHUB_ENV"
         else
-          VERSION="0.1+${{ github.run_number }}"
+          echo "VERSION=0.1+$RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "LABEL=0.1+$RUN_NUMBER" >> "$GITHUB_ENV"
         fi
-        mkdir -p debian/DEBIAN
-        mkdir -p debian/usr/local/bin
-        mkdir -p debian/etc/resticara/templates
-        cp resticara debian/usr/local/bin/resticara
-        chmod +x debian/usr/local/bin/resticara
-        cp config.ini-dist debian/etc/resticara/config.ini
-        cp templates/* debian/etc/resticara/templates
-        echo "Package: resticara" > debian/DEBIAN/control
-        echo "Version: $VERSION" >> debian/DEBIAN/control
-        echo "Architecture: amd64" >> debian/DEBIAN/control
-        echo "Maintainer: Blagovest Petrov <blago.petrov@vute.tech>" >> debian/DEBIAN/control
-        echo "Description: Wrapper of Restic for simplified configuration and deployment." >> debian/DEBIAN/control
+        chmod +x resticara
 
     - name: Build DEB package
-      run: dpkg-deb --build debian resticara-${{ github.ref_name }}.deb
-
-    - name: Prepare RPM Package Structure
       run: |
-        if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION:1}"
-        else
-          VERSION="0.1+${{ github.run_number }}"
-        fi
-        mkdir -p ~/rpmbuild/SOURCES ~/rpmbuild/SPECS
-        cp resticara ~/rpmbuild/SOURCES/
-        cp config.ini-dist ~/rpmbuild/SOURCES/config.ini-dist
-        cp -r templates ~/rpmbuild/SOURCES/templates
-        echo "Summary: Wrapper of Restic for simplified configuration and deployment." > ~/rpmbuild/SPECS/resticara.spec
-        echo "Name: resticara" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "Version: $VERSION" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "Release: 1" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "License: GPLv3" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "%description" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "Wrapper of Restic for simplified configuration and deployment." >> ~/rpmbuild/SPECS/resticara.spec
-        echo "" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "%install" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "mkdir -p %{buildroot}/usr/bin" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "mkdir -p %{buildroot}/etc/resticara/templates" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "cp ~/rpmbuild/SOURCES/resticara %{buildroot}/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "chmod 0755 %{buildroot}/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "cp ~/rpmbuild/SOURCES/config.ini-dist %{buildroot}/etc/resticara/config.ini" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "cp -r ~/rpmbuild/SOURCES/templates/* %{buildroot}/etc/resticara/templates/" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "%files" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "/usr/bin/resticara" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "/etc/resticara/config.ini" >> ~/rpmbuild/SPECS/resticara.spec
-        echo "/etc/resticara/templates/*" >> ~/rpmbuild/SPECS/resticara.spec
+        mkdir -p debian/DEBIAN debian/usr/local/bin debian/etc/resticara/templates
+        install -m 0755 resticara debian/usr/local/bin/resticara
+        # the config holds credentials
+        install -m 0600 config.ini-dist debian/etc/resticara/config.ini
+        install -m 0644 templates/* debian/etc/resticara/templates/
+        cat > debian/DEBIAN/control <<EOF
+        Package: resticara
+        Version: $VERSION
+        Architecture: amd64
+        Maintainer: Blagovest Petrov <blago.petrov@vute.tech>
+        Recommends: restic (>= 0.17)
+        Description: Wrapper of Restic for simplified configuration and deployment.
+        EOF
+        # mark files in /etc as conffiles so upgrades don't overwrite local configuration
+        (cd debian && find etc -type f | sed 's|^|/|') > debian/DEBIAN/conffiles
+        dpkg-deb --root-owner-group --build debian "resticara-$LABEL.deb"
 
     - name: Build RPM package
-      run: rpmbuild -ba ~/rpmbuild/SPECS/resticara.spec
+      run: |
+        mkdir -p ~/rpmbuild/SOURCES/templates ~/rpmbuild/SPECS
+        cp resticara config.ini-dist ~/rpmbuild/SOURCES/
+        cp templates/* ~/rpmbuild/SOURCES/templates/
+        cat > ~/rpmbuild/SPECS/resticara.spec <<EOF
+        Summary: Wrapper of Restic for simplified configuration and deployment.
+        Name: resticara
+        Version: $VERSION
+        Release: 1
+        License: GPLv3
+
+        %description
+        Wrapper of Restic for simplified configuration and deployment.
+
+        %install
+        mkdir -p %{buildroot}/usr/bin %{buildroot}/etc/resticara/templates
+        install -m 0755 %{_sourcedir}/resticara %{buildroot}/usr/bin/resticara
+        install -m 0600 %{_sourcedir}/config.ini-dist %{buildroot}/etc/resticara/config.ini
+        install -m 0644 %{_sourcedir}/templates/* %{buildroot}/etc/resticara/templates/
+
+        %files
+        /usr/bin/resticara
+        %dir /etc/resticara
+        %dir /etc/resticara/templates
+        %config(noreplace) %attr(0600,root,root) /etc/resticara/config.ini
+        %config(noreplace) /etc/resticara/templates/*
+        EOF
+        rpmbuild -ba ~/rpmbuild/SPECS/resticara.spec
 
     - name: Build zip file
       run: |
-        if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
-          VERSION="${{ github.ref_name }}"
-        else
-          VERSION="0.1+${{ github.run_number }}"
-        fi
-        mkdir -p "resticara-$VERSION"
-        cp config.ini-dist "resticara-$VERSION/config.ini"
-        cp -r templates/ "resticara-$VERSION"
-        zip -r "resticara-$VERSION.zip" "resticara-$VERSION"
+        mkdir -p "resticara-$LABEL"
+        install -m 0755 resticara "resticara-$LABEL/resticara"
+        install -m 0600 config.ini-dist "resticara-$LABEL/config.ini"
+        cp -r templates/ "resticara-$LABEL"
+        zip -r "resticara-$LABEL.zip" "resticara-$LABEL"
 
     - name: Upload DEB package artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: deb-package
         path: '*.deb'
 
     - name: Upload RPM package artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: rpm-package
         path: ~/rpmbuild/RPMS/**/*.rpm
 
-    - name: Upload ZIP archivea artifact
-      uses: actions/upload-artifact@v4
+    - name: Upload ZIP archive artifact
+      uses: actions/upload-artifact@v7
       with:
         name: zip-archive
         path: '*.zip'
@@ -144,62 +147,31 @@ jobs:
     permissions:
       contents: write
     if: startsWith(github.ref, 'refs/tags/')
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
     - name: Download DEB package artifact
-      uses: actions/download-artifact@v5
+      uses: actions/download-artifact@v8
       with:
         name: deb-package
 
     - name: Download RPM package artifact
-      uses: actions/download-artifact@v5
+      uses: actions/download-artifact@v8
       with:
         name: rpm-package
 
     - name: Download ZIP archive artifact
-      uses: actions/download-artifact@v5
+      uses: actions/download-artifact@v8
       with:
         name: zip-archive
 
     - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        body: Resticara release
-        draft: false
-        prerelease: false
-
-    - name: Upload DEB Asset
-      uses: actions/upload-release-asset@v1
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./resticara-${{ github.ref_name }}.deb
-        asset_name: resticara-${{ github.ref_name }}.x86_64.deb
-        asset_content_type: application/octet-stream
-    
-    - name: Find RPM file path
-      id: find_rpm
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ github.ref_name }}
+        REPO: ${{ github.repository }}
       run: |
-        RPM_PATH=$(find ./x86_64/ -name "*.rpm")
-        echo "RPM_PATH=${RPM_PATH}"
-        echo "RPM_PATH=${RPM_PATH}" >> $GITHUB_ENV
-
-    - name: Upload RPM Asset
-      uses: actions/upload-release-asset@v1
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ' ${{ env.RPM_PATH }}'
-        asset_name: resticara-${{ github.ref_name }}.x86_64.rpm
-        asset_content_type: application/octet-stream
-
-    - name: Upload ZIP Asset
-      uses: actions/upload-release-asset@v1
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./resticara-${{ github.ref_name }}.zip
-        asset_name: resticara-${{ github.ref_name }}.Linux-x86_64.zip
-        asset_content_type: application/octet-stream
+        mv "resticara-$TAG.deb" "resticara-$TAG.x86_64.deb"
+        mv "$(find . -name '*.rpm' | head -n 1)" "resticara-$TAG.x86_64.rpm"
+        mv "resticara-$TAG.zip" "resticara-$TAG.Linux-x86_64.zip"
+        gh release create "$TAG" --repo "$REPO" --title "Release $TAG" --notes "Resticara release" \
+          "resticara-$TAG.x86_64.deb" "resticara-$TAG.x86_64.rpm" "resticara-$TAG.Linux-x86_64.zip"

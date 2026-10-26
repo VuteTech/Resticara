@@ -13,6 +13,7 @@ enabled = false
 ;pass = "#################3"
 ;to = "admin@example.com"
 ;server = "mail.example.com"
+;; 587 uses STARTTLS, 465 uses implicit TLS
 ;port = "587"
 
 [matrix]
@@ -20,6 +21,8 @@ enabled = false
 ;server = "https://matrix.example.com"
 ;username = "@bot:example.com"
 ;pass = "#################"
+;; alternatively use an access token instead of username/pass
+;access_token = "syt_..."
 ;room_id = "!abcdefg:example.com"
 
 [telegram]
