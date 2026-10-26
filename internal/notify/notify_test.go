@@ -96,3 +96,15 @@ func TestSendDisabledAndFailing(t *testing.T) {
 		t.Errorf("output = %q, emails = %d", out.String(), len(mail.sent))
 	}
 }
+
+func TestPlain(t *testing.T) {
+	m := Plain("[server-1] PRUNE FAILED: /srv/repo", "Fatal: <locked> & busy")
+	want := Messages{
+		Mail:     "[server-1] PRUNE FAILED: /srv/repo\n\nFatal: <locked> & busy",
+		Matrix:   "<b>❌ [server-1] PRUNE FAILED: /srv/repo</b><br/><pre><code>Fatal: &lt;locked&gt; &amp; busy</code></pre>",
+		Telegram: "<b>❌ [server-1] PRUNE FAILED: /srv/repo</b>\n<pre><code>Fatal: &lt;locked&gt; &amp; busy</code></pre>",
+	}
+	if m != want {
+		t.Errorf("Plain =\n%+v\nwant\n%+v", m, want)
+	}
+}

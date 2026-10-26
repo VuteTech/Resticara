@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,10 +31,30 @@ type General struct {
 	HostID string
 	// RetentionPrune is the default prune interval in days.
 	RetentionPrune int
+	// Prune holds the default prune limits.
+	Prune PruneLimits
 	// Exclude applies to every dir job.
 	Exclude Exclude
 	// Notify says when reports are sent.
 	Notify Notify
+}
+
+// PruneLimits bound how much work restic prune does; empty values use restic's defaults.
+type PruneLimits struct {
+	// MaxUnused is passed as --max-unused, for example "5%", "10G" or "unlimited".
+	MaxUnused string
+	// MaxRepackSize is passed as --max-repack-size, for example "2G".
+	MaxRepackSize string
+}
+
+// Repository is a restic repository with the settings of the jobs that use it.
+type Repository struct {
+	URL string
+	// PruneDays is the smallest prune interval of the jobs.
+	PruneDays int
+	Prune     PruneLimits
+	// Jobs are the keys of the jobs that back up to this repository.
+	Jobs []string
 }
 
 type Notify string
@@ -117,6 +138,8 @@ type Job struct {
 	Retention Retention
 	// PruneDays is the prune interval, from the job or the [general] default.
 	PruneDays int
+	// Prune holds the prune limits, from the job or the [general] defaults.
+	Prune PruneLimits
 }
 
 type Retention struct {
@@ -140,13 +163,13 @@ func (e *Error) Error() string {
 var excludeKeys = []string{"exclude", "exclude_file", "exclude_caches", "exclude_if_present"}
 
 var knownKeys = map[string][]string{
-	"general":     append([]string{"hostID", "retention_prune", "notify"}, excludeKeys...),
+	"general":     append([]string{"hostID", "retention_prune", "notify", "prune_max_unused", "prune_max_repack_size"}, excludeKeys...),
 	"smtp":        {"enabled", "from", "username", "pass", "to", "server", "port"},
 	"matrix":      {"enabled", "server", "username", "pass", "room_id", "access_token"},
 	"telegram":    {"enabled", "bot_token", "chat_id"},
 	"healthcheck": {"url", "prune_url"},
-	"dir":         append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"}, excludeKeys...),
-	"mysql":       {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"},
+	"dir":         append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size"}, excludeKeys...),
+	"mysql":       {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune", "prune_max_unused", "prune_max_repack_size"},
 }
 
 // repeatableKeys may be set more than once in a section, each line adding a value.
@@ -192,6 +215,7 @@ func (p *parser) parse(file *ini.File) Config {
 		RetentionPrune: p.pruneDays(general, "[general]", 30),
 		Exclude:        p.exclude(general, Exclude{}),
 		Notify:         NotifyAlways,
+		Prune:          p.pruneLimits(general, PruneLimits{}),
 	}
 	switch notify := Notify(value(general, "notify")); notify {
 	case "":
@@ -274,6 +298,16 @@ func (p *parser) parse(file *ini.File) Config {
 	}
 	sort.Slice(cfg.Jobs, func(i, j int) bool { return cfg.Jobs[i].Key < cfg.Jobs[j].Key })
 
+	// one prune runs per repository, so its jobs must agree on the limits
+	first := make(map[string]Job)
+	for _, job := range cfg.Jobs {
+		if other, ok := first[job.Repository]; !ok {
+			first[job.Repository] = job
+		} else if other.Prune != job.Prune {
+			p.errorf("%s and %s use repository %s but set different prune_max_unused or prune_max_repack_size", other.Key, job.Key, job.Repository)
+		}
+	}
+
 	return cfg
 }
 
@@ -287,6 +321,7 @@ func (p *parser) job(section *ini.Section, jobType JobType, name string, general
 		Name:       name,
 		Repository: value(section, "bucket"),
 		PruneDays:  p.pruneDays(section, key, general.RetentionPrune),
+		Prune:      p.pruneLimits(section, general.Prune),
 	}
 	if job.Repository == "" {
 		p.errorf("'bucket' is required for %s", key)
@@ -421,6 +456,29 @@ func (p *parser) boolean(section *ini.Section, key string, defaultValue bool) bo
 	return defaultValue
 }
 
+var (
+	sizePattern   = regexp.MustCompile(`^[0-9]+[kKmMgGtT]?$`)
+	unusedPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?%|[0-9]+[kKmMgGtT]?|unlimited)$`)
+)
+
+// pruneLimits reads the prune limits of a section, falling back to base.
+func (p *parser) pruneLimits(section *ini.Section, base PruneLimits) PruneLimits {
+	limits := base
+	if raw := value(section, "prune_max_unused"); raw != "" {
+		if !unusedPattern.MatchString(raw) {
+			p.errorf("'prune_max_unused' in [%s] must be a percentage, a size or unlimited, for example 5%%, 10G or unlimited; got %q", section.Name(), raw)
+		}
+		limits.MaxUnused = raw
+	}
+	if raw := value(section, "prune_max_repack_size"); raw != "" {
+		if !sizePattern.MatchString(raw) {
+			p.errorf("'prune_max_repack_size' in [%s] must be a size such as 500M or 2G, got %q", section.Name(), raw)
+		}
+		limits.MaxRepackSize = raw
+	}
+	return limits
+}
+
 // pingURL returns an http(s) URL from the section, or "" when it is not set.
 func (p *parser) pingURL(section *ini.Section, key string) string {
 	raw := value(section, key)
@@ -540,18 +598,34 @@ func (c Config) Job(key string) (Job, bool) {
 	return Job{}, false
 }
 
-// Repositories returns the distinct repositories of all jobs, sorted.
-func (c Config) Repositories() []string {
-	seen := make(map[string]bool)
-	var repos []string
+// Repositories returns the distinct repositories of all jobs, sorted by URL.
+func (c Config) Repositories() []Repository {
+	index := make(map[string]int)
+	var repos []Repository
 	for _, job := range c.Jobs {
-		if !seen[job.Repository] {
-			seen[job.Repository] = true
-			repos = append(repos, job.Repository)
+		i, ok := index[job.Repository]
+		if !ok {
+			i = len(repos)
+			index[job.Repository] = i
+			repos = append(repos, Repository{URL: job.Repository, PruneDays: job.PruneDays, Prune: job.Prune})
+		}
+		repos[i].Jobs = append(repos[i].Jobs, job.Key)
+		if job.PruneDays < repos[i].PruneDays {
+			repos[i].PruneDays = job.PruneDays
 		}
 	}
-	sort.Strings(repos)
+	sort.Slice(repos, func(i, j int) bool { return repos[i].URL < repos[j].URL })
 	return repos
+}
+
+// Repository returns the repository with the given URL.
+func (c Config) Repository(location string) (Repository, bool) {
+	for _, repo := range c.Repositories() {
+		if repo.URL == location {
+			return repo, true
+		}
+	}
+	return Repository{}, false
 }
 
 // Find returns the first of the locations that exists, or custom when it is set.

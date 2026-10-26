@@ -127,9 +127,17 @@ func SnapshotPaths(job config.Job) []string {
 	return paths
 }
 
-// PruneCommand returns the restic command that removes unreferenced data from a repository.
-func PruneCommand(repository string) Command {
-	return append(base(repository), "prune")
+// PruneCommand returns the restic command that removes unreferenced data from a
+// repository, within the repository's prune limits.
+func PruneCommand(repo config.Repository) Command {
+	cmd := append(base(repo.URL), "prune")
+	if repo.Prune.MaxUnused != "" {
+		cmd = append(cmd, "--max-unused="+repo.Prune.MaxUnused)
+	}
+	if repo.Prune.MaxRepackSize != "" {
+		cmd = append(cmd, "--max-repack-size="+repo.Prune.MaxRepackSize)
+	}
+	return cmd
 }
 
 // Result is the outcome of a command. ExitCode is -1 when the command could not be started.

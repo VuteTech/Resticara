@@ -135,9 +135,56 @@ func TestLoadErrors(t *testing.T) {
 }
 
 func TestRepositories(t *testing.T) {
-	cfg := Config{Jobs: []Job{{Repository: "b"}, {Repository: "a"}, {Repository: "b"}}}
-	if got := cfg.Repositories(); !reflect.DeepEqual(got, []string{"a", "b"}) {
-		t.Errorf("Repositories() = %v", got)
+	limits := PruneLimits{MaxUnused: "10%"}
+	cfg := Config{Jobs: []Job{
+		{Key: "dir:b1", Repository: "b", PruneDays: 30, Prune: limits},
+		{Key: "dir:a", Repository: "a", PruneDays: 21},
+		{Key: "mysql:b2", Repository: "b", PruneDays: 14, Prune: limits},
+	}}
+	want := []Repository{
+		{URL: "a", PruneDays: 21, Jobs: []string{"dir:a"}},
+		// the repository is pruned as often as its most frequent job asks for
+		{URL: "b", PruneDays: 14, Prune: limits, Jobs: []string{"dir:b1", "mysql:b2"}},
+	}
+	if got := cfg.Repositories(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Repositories() =\n%+v\nwant\n%+v", got, want)
+	}
+	if repo, ok := cfg.Repository("b"); !ok || repo.PruneDays != 14 {
+		t.Errorf("Repository(b) = %+v, %v", repo, ok)
+	}
+	if _, ok := cfg.Repository("c"); ok {
+		t.Error("Repository(c) found a repository")
+	}
+}
+
+func TestLoadPruneLimits(t *testing.T) {
+	job := func(name, repo, extra string) string {
+		return "[dir:" + name + "]\nbucket = " + repo + "\ndirectory = /data\nretention_daily = 1\nretention_weekly = 1\nretention_monthly = 1\n" + extra + "\n"
+	}
+	cfg, err := Load(writeConfig(t, "[general]\nprune_max_unused = 10%\n[smtp]\nenabled = false\n"+
+		job("a", "/repo-a", "")+job("b", "/repo-b", "prune_max_repack_size = 2G\nprune_max_unused = unlimited")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := cfg.Job("dir:a")
+	b, _ := cfg.Job("dir:b")
+	if a.Prune != (PruneLimits{MaxUnused: "10%"}) || b.Prune != (PruneLimits{MaxUnused: "unlimited", MaxRepackSize: "2G"}) {
+		t.Errorf("limits a %+v, b %+v", a.Prune, b.Prune)
+	}
+
+	for _, ok := range []string{"5%", "2.5%", "100", "500M", "10g", "unlimited"} {
+		if _, err := Load(writeConfig(t, "[general]\nprune_max_unused = "+ok+"\n")); err != nil {
+			t.Errorf("prune_max_unused = %s: %v", ok, err)
+		}
+	}
+
+	_, err = Load(writeConfig(t, "[general]\nprune_max_unused = 5 %\nprune_max_repack_size = 2GB\n"+
+		job("a", "/shared", "prune_max_repack_size = 1G")+job("b", "/shared", "")))
+	want := `'prune_max_unused' in [general] must be a percentage, a size or unlimited, for example 5%, 10G or unlimited; got "5 %"
+'prune_max_repack_size' in [general] must be a size such as 500M or 2G, got "2GB"
+dir:a and dir:b use repository /shared but set different prune_max_unused or prune_max_repack_size`
+	if err == nil || err.Error() != want {
+		t.Errorf("error:\n%v\nwant:\n%s", err, want)
 	}
 }
 

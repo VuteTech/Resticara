@@ -2,6 +2,8 @@
 package systemd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -31,11 +33,18 @@ type Plan struct {
 }
 
 // NewPlan renders one backup timer that runs all backups sequentially (one report per
-// run) and a prune timer per job. binary and configPath must be absolute.
+// run) and a prune timer per repository. binary and configPath must be absolute.
 func NewPlan(cfg config.Config, binary, configPath string) Plan {
 	serviceEnv := fmt.Sprintf(`EnvironmentFile=-%s
 Environment=RESTIC_CACHE_DIR=/var/cache/resticara
-CacheDirectory=resticara`, filepath.Join(filepath.Dir(configPath), EnvFile))
+CacheDirectory=resticara`, escapeSpecifiers(filepath.Join(filepath.Dir(configPath), EnvFile)))
+	execStart := func(args ...string) string {
+		quoted := []string{execArg(binary), execArg("--config=" + configPath)}
+		for _, arg := range args {
+			quoted = append(quoted, execArg(arg))
+		}
+		return strings.Join(quoted, " ")
+	}
 
 	backupService := fmt.Sprintf(`[Unit]
 Description=Resticara backup
@@ -44,12 +53,12 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=%s --config=%s run
+ExecStart=%s
 %s
 
 [Install]
 WantedBy=multi-user.target
-`, binary, configPath, serviceEnv)
+`, execStart("run"), serviceEnv)
 
 	backupTimer := `[Unit]
 Description=Resticara backup timer
@@ -70,7 +79,7 @@ WantedBy=timers.target
 		Timers: []string{"resticara-backup.timer"},
 	}
 
-	for _, job := range cfg.Jobs {
+	for _, repo := range cfg.Repositories() {
 		pruneService := fmt.Sprintf(`[Unit]
 Description=Resticara prune for %s
 Wants=network-online.target
@@ -78,12 +87,12 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=%s --config=%s prune %s
+ExecStart=%s
 %s
 
 [Install]
 WantedBy=multi-user.target
-`, job.Key, binary, configPath, job.Repository, serviceEnv)
+`, escapeSpecifiers(repo.URL), execStart("prune", repo.URL), serviceEnv)
 
 		// OnUnitActiveSec alone never fires because it counts from the last run of the service;
 		// OnActiveSec schedules the first run after the timer is (re)started.
@@ -97,9 +106,9 @@ RandomizedDelaySec=1h
 
 [Install]
 WantedBy=timers.target
-`, job.Key, job.PruneDays)
+`, escapeSpecifiers(repo.URL), repo.PruneDays)
 
-		base := "resticara-" + sanitizeName(job.Key) + "-prune"
+		base := pruneUnitBase(repo.URL)
 		plan.Units = append(plan.Units,
 			Unit{Name: base + ".service", Content: pruneService},
 			Unit{Name: base + ".timer", Content: pruneTimer},
@@ -109,9 +118,41 @@ WantedBy=timers.target
 	return plan
 }
 
-func sanitizeName(name string) string {
-	replacer := strings.NewReplacer(":", "-", "/", "-", " ", "-")
-	return replacer.Replace(name)
+// pruneUnitBase names the prune units of a repository: a readable part made of the
+// URL's letters and digits, and a short hash so different URLs never share a name.
+func pruneUnitBase(url string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range url {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			dash = false
+		} else if !dash && b.Len() > 0 {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	readable := strings.TrimSuffix(b.String(), "-")
+	if len(readable) > 40 {
+		readable = strings.TrimSuffix(readable[:40], "-")
+	}
+	sum := sha256.Sum256([]byte(url))
+	return "resticara-prune-" + readable + "-" + hex.EncodeToString(sum[:4])
+}
+
+// escapeSpecifiers escapes "%", which systemd expands in most unit settings.
+func escapeSpecifiers(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
+}
+
+// execArg quotes one ExecStart argument for systemd: "%" and "$" are escaped, and
+// arguments with spaces, quotes or backslashes are put in double quotes.
+func execArg(arg string) string {
+	arg = strings.ReplaceAll(escapeSpecifiers(arg), "$", "$$")
+	if arg != "" && !strings.ContainsAny(arg, " \t\n\"'\\;") {
+		return arg
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(arg) + `"`
 }
 
 // Systemctl runs systemctl commands.

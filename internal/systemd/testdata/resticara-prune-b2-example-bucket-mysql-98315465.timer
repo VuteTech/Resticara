@@ -1,9 +1,9 @@
 [Unit]
-Description=Resticara prune timer for dir:website
+Description=Resticara prune timer for b2:example-bucket:mysql/
 
 [Timer]
 OnActiveSec=1h
-OnUnitActiveSec=21d
+OnUnitActiveSec=14d
 RandomizedDelaySec=1h
 
 [Install]

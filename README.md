@@ -98,8 +98,15 @@ resticara prune all                   # prune all repositories
 resticara prune b2:bucket:wpsites/    # prune a single repository
 ```
 
+Pruning rewrites data, which costs time and, on B2 or S3, transactions. Two optional keys limit the work, in `[general]` for all jobs or in a job section:
+
+* `prune_max_unused`: how much unused data may stay in the repository before it is repacked, for example `5%` (restic's default), `10G` or `unlimited`.
+* `prune_max_repack_size`: stop after repacking this much data, for example `2G`; the rest is done by the next prune.
+
+Jobs that back up to the same repository must use the same limits, since the repository is pruned once for all of them. A failed prune is reported through the enabled notification channels; successful prunes are not, use `prune_url` under `[healthcheck]` to monitor them.
+
 ## Generating systemd timers
-Run `resticara gentimer` as root to generate systemd service and timer files that run the `resticara` binary used for the command, writing them to the systemd unit directory. A single daily `resticara-backup.timer` runs all configured backups one after another and sends one report, and each backup gets a prune timer. Existing timers are restarted to pick up changes and any timers without a matching configuration are disabled and removed. Prune timers first run an hour after they are started and then every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup).
+Run `resticara gentimer` as root to generate systemd service and timer files that run the `resticara` binary used for the command, writing them to the systemd unit directory. A single daily `resticara-backup.timer` runs all configured backups one after another and sends one report, and each repository gets one prune timer (`resticara-prune-<repository>-<hash>.timer`), however many jobs back up to it. Existing timers are restarted to pick up changes and any timers without a matching configuration, including the per-job prune timers of older versions, are disabled and removed. Prune timers first run an hour after they are started and then every 30 days by default, or a custom interval can be set with `retention_prune` in the configuration (either globally under `[general]` or per backup); a repository used by several jobs is pruned as often as the most frequent of them asks for.
 
 ## TODO
 * Webhooks: ability to integrate with various webhooks for enhanced automation.
