@@ -1,0 +1,75 @@
+# Package definition for nfpm (https://nfpm.goreleaser.com), used by CI:
+#   GOARCH=amd64 VERSION=1.2.3 nfpm package --packager deb --target dist/
+# The binary for GOARCH is expected at build/resticara.
+name: resticara
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+# versions like 0.1+42 for untagged builds are used as they are
+version_schema: none
+release: 1
+section: admin
+maintainer: Blagovest Petrov <blago.petrov@vute.tech>
+vendor: Vute Tech Ltd.
+homepage: https://github.com/VuteTech/Resticara
+license: GPL-3.0-or-later
+description: |
+  Wrapper of Restic for simplified configuration and deployment.
+  Runs restic backups, retention, prune and repository checks from one
+  INI file, schedules them with systemd timers and reports the results by
+  email, Matrix, Telegram and Healthchecks.
+
+contents:
+  - src: build/resticara
+    dst: /usr/bin/resticara
+    file_info:
+      mode: 0755
+
+  # older deb packages installed the binary here, and the systemd units they
+  # generated still run it from this path until gentimer runs again
+  - src: /usr/bin/resticara
+    dst: /usr/local/bin/resticara
+    type: symlink
+    packager: deb
+
+  # the config holds credentials; local changes survive upgrades
+  - src: config.ini-dist
+    dst: /etc/resticara/config.ini
+    type: config|noreplace
+    file_info:
+      mode: 0600
+
+  - src: templates/*
+    dst: /etc/resticara/templates/
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  - src: README.md
+    dst: /usr/share/doc/resticara/README.md
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/resticara/LICENSE
+    file_info:
+      mode: 0644
+  - src: templates/*
+    dst: /usr/share/doc/resticara/templates/
+    file_info:
+      mode: 0644
+  - src: config.ini-dist
+    dst: /usr/share/doc/resticara/config.ini-dist
+    file_info:
+      mode: 0644
+
+scripts:
+  preinstall: packaging/preinstall.sh
+  postinstall: packaging/postinstall.sh
+
+overrides:
+  deb:
+    recommends:
+      - restic (>= 0.17)
+  rpm:
+    recommends:
+      - restic >= 0.17

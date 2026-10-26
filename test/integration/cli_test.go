@@ -50,3 +50,13 @@ func TestWarnsAboutReadableConfig(t *testing.T) {
 
 	e.resticara("--config="+config, "prune", "all").expect(t, 0, "contains credentials but has mode 0644")
 }
+
+// TestVersion needs neither a config nor syslog.
+func TestVersion(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for _, args := range [][]string{{"--version"}, {"version"}, {"--config=" + e.path("missing.ini"), "--version"}} {
+		res := e.resticara(args...)
+		res.expect(t, 0, "resticara dev")
+	}
+}

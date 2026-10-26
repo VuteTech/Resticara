@@ -21,10 +21,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"log/syslog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -37,6 +37,39 @@ import (
 	"resticara/notifiers/healthcheck"
 )
 
+// version is set for releases with -ldflags "-X main.version=<version>".
+var version = "dev"
+
+// fullVersion returns the version; development builds add the commit they were built from.
+func fullVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	var revision, modified string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value
+		}
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	switch {
+	case revision == "":
+		return version
+	case modified == "true":
+		return version + " (" + revision + ", modified)"
+	}
+	return version + " (" + revision + ")"
+}
+
 func main() {
 	os.Exit(realMain())
 }
@@ -44,17 +77,16 @@ func main() {
 // realMain returns the process exit code: 0 on success (including backups with warnings),
 // 1 on failure and 2 on usage errors, so systemd marks failed runs as failed.
 func realMain() int {
-	logwriter, err := syslog.New(syslog.LOG_NOTICE, "resticara")
-	if err != nil {
-		log.Fatal("Failed to initialize syslog writer:", err)
-	}
-	defer logwriter.Close()
-
 	customConfig := flag.String("config", "", "Path to custom config.ini file")
 	customTemplate := flag.String("mail_template", "", "Path to custom mail template file")
+	showVersion := flag.Bool("version", false, "Print the version")
 	flag.Parse()
 
 	args := flag.Args()
+	if *showVersion || len(args) > 0 && args[0] == "version" {
+		fmt.Println("resticara " + fullVersion())
+		return 0
+	}
 	if len(args) == 0 {
 		printUsage()
 		return 2
@@ -100,7 +132,7 @@ func realMain() int {
 
 	switch args[0] {
 	case "run":
-		return runBackup(cfg, configPath, *customTemplate, args[1:], logwriter)
+		return runBackup(cfg, configPath, *customTemplate, args[1:])
 	case "validate":
 		return runValidate(cfg, configPath)
 	case "prune":
@@ -119,11 +151,13 @@ func printUsage() {
 	fmt.Println("Usage of resticara:")
 	fmt.Println("  --config=       : Specify a custom config.ini file path")
 	fmt.Println("  --mail_template=: Specify a custom mail template file path")
+	fmt.Println("  --version       : Print the version")
 	fmt.Println("  run [command]   : Run backups (all or specific command)")
 	fmt.Println("  prune <all|repository> : Prune restic repositories")
 	fmt.Println("  check <all|repository> : Verify restic repositories")
 	fmt.Println("  gentimer        : Generate systemd service and timer files")
 	fmt.Println("  validate        : Check the configuration and the backed up directories")
+	fmt.Println("  version         : Print the version")
 }
 
 // printConfigError prints why the configuration could not be loaded, one problem per line.
@@ -181,18 +215,18 @@ func pinged(url string, fn func() (int, string)) int {
 // runBackup runs all jobs, or the one named in args, and sends the report. Only
 // full runs ping the healthcheck, so a manual run of one job does not hide a
 // missing scheduled run.
-func runBackup(cfg config.Config, configPath, customTemplate string, args []string, logwriter *syslog.Writer) int {
+func runBackup(cfg config.Config, configPath, customTemplate string, args []string) int {
 	url := cfg.Healthcheck.URL
 	if len(args) > 0 {
 		url = ""
 	}
 	return pinged(url, func() (int, string) {
-		return backupAndReport(cfg, configPath, customTemplate, args, logwriter)
+		return backupAndReport(cfg, configPath, customTemplate, args)
 	})
 }
 
 // backupAndReport returns the exit code and the report text for the healthcheck.
-func backupAndReport(cfg config.Config, configPath, customTemplate string, args []string, logwriter *syslog.Writer) (int, string) {
+func backupAndReport(cfg config.Config, configPath, customTemplate string, args []string) (int, string) {
 	templatePath := config.Find(customTemplate, report.TemplateLocations(configPath, "mail_template.txt"))
 	if templatePath == "" {
 		return fail("Error: mail_template.txt not found in any of the expected locations")
@@ -220,6 +254,7 @@ func backupAndReport(cfg config.Config, configPath, customTemplate string, args 
 	}
 	result := backup.Run(restic.ExecRunner{}, jobs, resticHost, os.Stdout)
 	rep := report.New(host, started, result)
+	rep.Version = fullVersion()
 	exitCode := 0
 	if result.Status == backup.Failure {
 		exitCode = 1
@@ -230,7 +265,13 @@ func backupAndReport(cfg config.Config, configPath, customTemplate string, args 
 		return fail(problem)
 	}
 
-	report.Log(logwriter, rep)
+	// without syslog (containers, minimal systems) the report is still printed and sent
+	if logwriter, err := syslog.New(syslog.LOG_NOTICE, "resticara"); err != nil {
+		fmt.Printf("Warning: syslog is not available, the report is not logged there: %v\n", err)
+	} else {
+		report.Log(logwriter, rep)
+		logwriter.Close()
+	}
 	report.Print(os.Stdout, rep)
 
 	if cfg.General.Notify == config.NotifyProblems && result.Status == backup.Success {
