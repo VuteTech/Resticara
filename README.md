@@ -29,6 +29,16 @@ Every backup is a section named `type:name`:
 
 Both need `bucket` (the restic repository) and `retention_daily`, `retention_weekly` and `retention_monthly`. Changing the directories of a job starts a new snapshot group in restic, so the old snapshots are no longer removed by the retention rules; remove them once with `restic forget --path`.
 
+### Excluding files
+`dir:` jobs can leave files out of the backup. Set these in `[general]` to apply them to every `dir:` job, or in a job section; the values from both are combined:
+
+* `exclude = <pattern>`: one line per pattern, see [restic's exclude patterns](https://restic.readthedocs.io/en/stable/040_backup.html#excluding-files). A pattern without a leading `/` matches at any depth, `**` matches any number of directories and a leading `!` keeps files that an earlier pattern excluded.
+* `exclude_file = <path>`: a file with one pattern per line.
+* `exclude_caches = true`: skips directories marked with a `CACHEDIR.TAG` file. A job can turn it off again with `exclude_caches = false`.
+* `exclude_if_present = <file name>`: skips every directory that contains a file with this name, for example `.nobackup`.
+
+Typical patterns for WordPress sites are `wp-content/cache` and `wp-content/upgrade`. Excluding files keeps the snapshot paths, so retention keeps working on the existing snapshots.
+
 Check a configuration with:
 
 ```

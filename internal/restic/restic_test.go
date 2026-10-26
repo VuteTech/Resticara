@@ -14,6 +14,12 @@ func TestCommands(t *testing.T) {
 	dir := config.Job{Type: config.JobDir, Repository: "b2:bucket:website/", Directories: []string{"/var/www/site", "/srv/My Files"}, Retention: retention}
 	mysql := config.Job{Type: config.JobMySQL, Repository: "b2:bucket:mysql/", Database: "site_db", MysqldumpArgs: []string{"--routines", "--events"}, Retention: retention}
 	allDatabases := config.Job{Type: config.JobMySQL, Repository: "/repo", Database: "--all-databases"}
+	excluding := config.Job{Type: config.JobDir, Repository: "/repo", Directories: []string{"/var/www"}, Exclude: config.Exclude{
+		Patterns:  []string{"*.tmp", "-weird"},
+		Files:     []string{"/etc/resticara/site.exclude"},
+		Caches:    true,
+		IfPresent: []string{".nobackup"},
+	}}
 
 	tests := []struct {
 		name string
@@ -24,6 +30,11 @@ func TestCommands(t *testing.T) {
 		{"mysql backup", BackupCommand(mysql), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "backup", "--stdin-filename", "site_db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "--routines", "--events", "site_db"}},
 		// the snapshot path stays "<database>.sql", so existing snapshots keep their group for forget
 		{"all databases", BackupCommand(allDatabases), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--stdin-filename", "--all-databases.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "--all-databases"}},
+		{"dir backup with excludes", BackupCommand(excluding), Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup",
+			"--exclude=*.tmp", "--exclude=-weird", "--exclude-file=/etc/resticara/site.exclude", "--exclude-caches", "--exclude-if-present=.nobackup", "/var/www"}},
+		// excludes are only for directories, a mysql job never gets them
+		{"mysql backup ignores excludes", BackupCommand(config.Job{Type: config.JobMySQL, Repository: "/repo", Database: "db", Exclude: config.Exclude{Caches: true}}),
+			Command{"restic", "-r", "/repo", "--retry-lock", "30m", "backup", "--stdin-filename", "db.sql", "--stdin-from-command", "--", "mysqldump", "--single-transaction", "db"}},
 		{"forget", ForgetCommand(mysql), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "forget", "--keep-daily", "2", "--keep-weekly", "7", "--keep-monthly", "3"}},
 		{"prune", PruneCommand("b2:bucket:mysql/"), Command{"restic", "-r", "b2:bucket:mysql/", "--retry-lock", "30m", "prune"}},
 	}

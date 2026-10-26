@@ -5,6 +5,9 @@
 ; if hostID=hostname, the actual hostname of the machine will be shown
 hostID=hostname
 retention_prune = 14
+;; excludes in [general] apply to every dir job
+;exclude = *.tmp
+;exclude_caches = true
 
 [smtp]
 enabled = false
@@ -35,6 +38,9 @@ bucket = b2:bucket:wpsites/
 ; one line per directory
 directory = /var/www
 directory = /etc/nginx
+;; one line per pattern; see the README for exclude_file and exclude_if_present
+;exclude = wp-content/cache
+;exclude = wp-content/upgrade
 retention_daily = 4
 retention_weekly = 7
 retention_monthly = 3

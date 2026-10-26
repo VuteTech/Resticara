@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,21 @@ type General struct {
 	HostID string
 	// RetentionPrune is the default prune interval in days.
 	RetentionPrune int
+	// Exclude applies to every dir job.
+	Exclude Exclude
+}
+
+// Exclude selects files that dir jobs leave out of the backup.
+type Exclude struct {
+	// Patterns are passed as --exclude, one per "exclude" line.
+	Patterns []string
+	// Files are passed as --exclude-file, one per "exclude_file" line.
+	Files []string
+	// Caches excludes directories marked with a CACHEDIR.TAG file (--exclude-caches).
+	Caches bool
+	// IfPresent are file names passed as --exclude-if-present: directories that
+	// contain such a file are left out.
+	IfPresent []string
 }
 
 type SMTP struct {
@@ -75,7 +91,9 @@ type Job struct {
 	Database string
 	// MysqldumpArgs are extra mysqldump options for mysql jobs.
 	MysqldumpArgs []string
-	Retention     Retention
+	// Exclude holds the [general] excludes followed by the job's own, for dir jobs.
+	Exclude   Exclude
+	Retention Retention
 	// PruneDays is the prune interval, from the job or the [general] default.
 	PruneDays int
 }
@@ -98,17 +116,19 @@ func (e *Error) Error() string {
 	return strings.Join(e.Problems, "\n")
 }
 
+var excludeKeys = []string{"exclude", "exclude_file", "exclude_caches", "exclude_if_present"}
+
 var knownKeys = map[string][]string{
-	"general":  {"hostID", "retention_prune"},
+	"general":  append([]string{"hostID", "retention_prune"}, excludeKeys...),
 	"smtp":     {"enabled", "from", "username", "pass", "to", "server", "port"},
 	"matrix":   {"enabled", "server", "username", "pass", "room_id", "access_token"},
 	"telegram": {"enabled", "bot_token", "chat_id"},
-	"dir":      {"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"},
+	"dir":      append([]string{"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"}, excludeKeys...),
 	"mysql":    {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"},
 }
 
 // repeatableKeys may be set more than once in a section, each line adding a value.
-var repeatableKeys = map[string]bool{"directory": true}
+var repeatableKeys = map[string]bool{"directory": true, "exclude": true, "exclude_file": true, "exclude_if_present": true}
 
 // Load reads and validates the configuration file. Problems that make it unusable
 // are returned together as an *Error.
@@ -148,12 +168,13 @@ func (p *parser) parse(file *ini.File) Config {
 	cfg.General = General{
 		HostID:         value(general, "hostID"),
 		RetentionPrune: p.pruneDays(general, "[general]", 30),
+		Exclude:        p.exclude(general, Exclude{}),
 	}
 
 	smtp := file.Section("smtp")
 	p.checkKeys(smtp, "smtp", true)
 	cfg.SMTP = SMTP{
-		Enabled:  p.boolean(smtp, true),
+		Enabled:  p.boolean(smtp, "enabled", true),
 		From:     value(smtp, "from"),
 		Username: value(smtp, "username"),
 		Pass:     value(smtp, "pass"),
@@ -165,7 +186,7 @@ func (p *parser) parse(file *ini.File) Config {
 	matrix := file.Section("matrix")
 	p.checkKeys(matrix, "matrix", true)
 	cfg.Matrix = Matrix{
-		Enabled:     p.boolean(matrix, false),
+		Enabled:     p.boolean(matrix, "enabled", false),
 		Server:      value(matrix, "server"),
 		Username:    value(matrix, "username"),
 		Pass:        value(matrix, "pass"),
@@ -176,7 +197,7 @@ func (p *parser) parse(file *ini.File) Config {
 	telegram := file.Section("telegram")
 	p.checkKeys(telegram, "telegram", true)
 	cfg.Telegram = Telegram{
-		Enabled:  p.boolean(telegram, false),
+		Enabled:  p.boolean(telegram, "enabled", false),
 		BotToken: value(telegram, "bot_token"),
 	}
 	if raw := value(telegram, "chat_id"); raw != "" {
@@ -212,14 +233,14 @@ func (p *parser) parse(file *ini.File) Config {
 			p.errorf("section [%s] must be named type:name, for example [%s:website]", name, jobType)
 			continue
 		}
-		cfg.Jobs = append(cfg.Jobs, p.job(section, JobType(jobType), jobName, cfg.General.RetentionPrune))
+		cfg.Jobs = append(cfg.Jobs, p.job(section, JobType(jobType), jobName, cfg.General))
 	}
 	sort.Slice(cfg.Jobs, func(i, j int) bool { return cfg.Jobs[i].Key < cfg.Jobs[j].Key })
 
 	return cfg
 }
 
-func (p *parser) job(section *ini.Section, jobType JobType, name string, defaultPruneDays int) Job {
+func (p *parser) job(section *ini.Section, jobType JobType, name string, general General) Job {
 	key := section.Name()
 	p.checkKeys(section, string(jobType), false)
 
@@ -228,7 +249,7 @@ func (p *parser) job(section *ini.Section, jobType JobType, name string, default
 		Type:       jobType,
 		Name:       name,
 		Repository: value(section, "bucket"),
-		PruneDays:  p.pruneDays(section, key, defaultPruneDays),
+		PruneDays:  p.pruneDays(section, key, general.RetentionPrune),
 	}
 	if job.Repository == "" {
 		p.errorf("'bucket' is required for %s", key)
@@ -244,6 +265,7 @@ func (p *parser) job(section *ini.Section, jobType JobType, name string, default
 		if len(job.Directories) == 0 {
 			p.errorf("'directory' is required for %s", key)
 		}
+		job.Exclude = p.exclude(section, general.Exclude)
 	case JobMySQL:
 		job.Database = value(section, "database")
 		if job.Database == "" {
@@ -307,8 +329,48 @@ func (p *parser) pruneDays(section *ini.Section, where string, defaultDays int) 
 	return days
 }
 
-func (p *parser) boolean(section *ini.Section, defaultValue bool) bool {
-	raw := value(section, "enabled")
+// exclude reads the exclude keys of a section and adds them to base.
+func (p *parser) exclude(section *ini.Section, base Exclude) Exclude {
+	ex := Exclude{
+		Patterns:  append(append([]string(nil), base.Patterns...), nonEmpty(values(section, "exclude"))...),
+		Files:     append(append([]string(nil), base.Files...), nonEmpty(values(section, "exclude_file"))...),
+		Caches:    p.boolean(section, "exclude_caches", base.Caches),
+		IfPresent: append(append([]string(nil), base.IfPresent...), nonEmpty(values(section, "exclude_if_present"))...),
+	}
+	for _, pattern := range nonEmpty(values(section, "exclude")) {
+		if err := checkPattern(pattern); err != nil {
+			p.errorf("'exclude' pattern %q in [%s] is not valid: %v", pattern, section.Name(), err)
+		}
+	}
+	return ex
+}
+
+// checkPattern rejects patterns restic cannot use, such as an unclosed "[".
+// A leading "!" negates a pattern and "**" matches any number of directories.
+func checkPattern(pattern string) error {
+	for _, part := range strings.Split(strings.TrimPrefix(pattern, "!"), "/") {
+		if part == "**" {
+			continue
+		}
+		if _, err := path.Match(part, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nonEmpty(vals []string) []string {
+	var out []string
+	for _, v := range vals {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func (p *parser) boolean(section *ini.Section, key string, defaultValue bool) bool {
+	raw := value(section, key)
 	if raw == "" {
 		return defaultValue
 	}
@@ -318,7 +380,7 @@ func (p *parser) boolean(section *ini.Section, defaultValue bool) bool {
 	case "false", "f", "no", "n", "off", "0":
 		return false
 	}
-	p.errorf("'enabled' in [%s] must be true or false, got %q", section.Name(), raw)
+	p.errorf("'%s' in [%s] must be true or false, got %q", key, section.Name(), raw)
 	return defaultValue
 }
 
@@ -398,6 +460,11 @@ func (c Config) PathWarnings() []string {
 				warning += "; to back up several directories, put each on its own 'directory =' line"
 			}
 			warnings = append(warnings, warning)
+		}
+		for _, file := range job.Exclude.Files {
+			if _, err := os.Stat(file); err != nil {
+				warnings = append(warnings, fmt.Sprintf("exclude file %q of %s does not exist", file, job.Key))
+			}
 		}
 	}
 	return warnings

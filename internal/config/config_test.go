@@ -64,7 +64,7 @@ anything = goes
 		t.Fatal(err)
 	}
 
-	if cfg.General != (General{HostID: "server-1", RetentionPrune: 21}) {
+	if !reflect.DeepEqual(cfg.General, General{HostID: "server-1", RetentionPrune: 21}) {
 		t.Errorf("General = %+v", cfg.General)
 	}
 	// SMTP is enabled unless disabled explicitly
@@ -342,5 +342,109 @@ func TestPathWarnings(t *testing.T) {
 	}
 	if got := cfg.PathWarnings(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("PathWarnings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestLoadExcludes(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+[general]
+exclude = *.tmp
+exclude = **/node_modules
+exclude_caches = true
+
+[dir:site]
+bucket = /repo
+directory = /var/www/site
+exclude = wp-content/cache
+exclude_file = /etc/resticara/site.exclude
+exclude_if_present = .nobackup
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+
+[dir:plain]
+bucket = /repo
+directory = /srv
+exclude_caches = false
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+
+[mysql:db]
+bucket = /repo-db
+database = website_db
+exclude = *.sql
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	general := Exclude{Patterns: []string{"*.tmp", "**/node_modules"}, Caches: true}
+	if !reflect.DeepEqual(cfg.General.Exclude, general) {
+		t.Errorf("General.Exclude = %+v", cfg.General.Exclude)
+	}
+	jobs := map[string]Exclude{
+		// [general] excludes come first, then the job's own
+		"dir:site": {
+			Patterns:  []string{"*.tmp", "**/node_modules", "wp-content/cache"},
+			Files:     []string{"/etc/resticara/site.exclude"},
+			Caches:    true,
+			IfPresent: []string{".nobackup"},
+		},
+		// a job can turn exclude_caches off again
+		"dir:plain": {Patterns: []string{"*.tmp", "**/node_modules"}},
+		// excludes do not apply to database dumps
+		"mysql:db": {},
+	}
+	for key, want := range jobs {
+		job, _ := cfg.Job(key)
+		if !reflect.DeepEqual(job.Exclude, want) {
+			t.Errorf("%s Exclude =\n%+v\nwant\n%+v", key, job.Exclude, want)
+		}
+	}
+	// the general excludes are copied, not shared between jobs
+	site, _ := cfg.Job("dir:site")
+	if &site.Exclude.Patterns[0] == &cfg.General.Exclude.Patterns[0] {
+		t.Error("job patterns share memory with [general]")
+	}
+
+	if len(cfg.Warnings) != 2 || cfg.Warnings[1] != "unknown key 'exclude' in [mysql:db] is ignored" {
+		t.Errorf("Warnings = %q", cfg.Warnings)
+	}
+}
+
+func TestLoadExcludeErrors(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+[general]
+exclude = cache[
+
+[dir:site]
+bucket = /repo
+directory = /data
+exclude = !logs/[a-
+exclude = **/ok/*.log
+exclude_caches = sometimes
+retention_daily = 1
+retention_weekly = 1
+retention_monthly = 1
+`))
+	want := `'exclude' pattern "cache[" in [general] is not valid: syntax error in pattern
+'exclude_caches' in [dir:site] must be true or false, got "sometimes"
+'exclude' pattern "!logs/[a-" in [dir:site] is not valid: syntax error in pattern`
+	if err == nil || err.Error() != want {
+		t.Errorf("error:\n%v\nwant:\n%s", err, want)
+	}
+}
+
+func TestPathWarningsExcludeFile(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.exclude")
+	cfg := Config{Jobs: []Job{{Key: "dir:site", Type: JobDir, Directories: []string{dir}, Exclude: Exclude{Files: []string{missing}}}}}
+	want := fmt.Sprintf("exclude file %q of dir:site does not exist", missing)
+	if got := cfg.PathWarnings(); len(got) != 1 || got[0] != want {
+		t.Errorf("PathWarnings = %q", got)
 	}
 }

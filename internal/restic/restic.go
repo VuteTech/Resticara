@@ -54,6 +54,7 @@ func BackupCommand(job config.Job) Command {
 	switch job.Type {
 	case config.JobDir:
 		cmd = append(cmd, "backup")
+		cmd = append(cmd, excludeArgs(job.Exclude)...)
 		cmd = append(cmd, job.Directories...)
 	case config.JobMySQL:
 		// restic runs mysqldump itself, so a failed dump fails the backup instead of storing a truncated snapshot
@@ -62,6 +63,25 @@ func BackupCommand(job config.Job) Command {
 		cmd = append(cmd, strings.Fields(job.Database)...)
 	}
 	return cmd
+}
+
+// excludeArgs returns the restic backup options for the excludes. Values are joined to
+// their option with "=", so a pattern starting with "-" is not read as an option.
+func excludeArgs(ex config.Exclude) []string {
+	var args []string
+	for _, pattern := range ex.Patterns {
+		args = append(args, "--exclude="+pattern)
+	}
+	for _, file := range ex.Files {
+		args = append(args, "--exclude-file="+file)
+	}
+	if ex.Caches {
+		args = append(args, "--exclude-caches")
+	}
+	for _, name := range ex.IfPresent {
+		args = append(args, "--exclude-if-present="+name)
+	}
+	return args
 }
 
 // ForgetCommand returns the restic command that applies the job's retention policy.
