@@ -22,6 +22,21 @@ You can download the latest version of Resticara from the [Releases](https://git
 ## Configuration
 The configuration is done through `config.ini` file placed in `/etc/resticara/` . Check out the `config.ini-dist` file in the repository for an example configuration.
 
+Every backup is a section named `type:name`:
+
+* `[dir:name]` backs up directories. Repeat `directory =` for each directory; paths may contain spaces.
+* `[mysql:name]` backs up a `mysqldump`. `database` is a database name or mysqldump selection options such as `--all-databases` or `--databases db1 db2`. The dump always uses `--single-transaction`; add more options with `mysqldump_args`, for example `mysqldump_args = --routines --events` (use `--skip-single-transaction` for MyISAM tables).
+
+Both need `bucket` (the restic repository) and `retention_daily`, `retention_weekly` and `retention_monthly`. Changing the directories of a job starts a new snapshot group in restic, so the old snapshots are no longer removed by the retention rules; remove them once with `restic forget --path`.
+
+Check a configuration with:
+
+```
+resticara validate
+```
+
+It lists every error at once, warns about unknown keys (usually typos), notification channels that are enabled but incomplete, and directories that do not exist on this machine. `run`, `prune` and `gentimer` refuse to start when the configuration has errors.
+
 ## Requirements
 Restic 0.17 or newer is required (MySQL backups use `--stdin-from-command`, so a failed `mysqldump` fails the backup instead of storing a truncated dump).
 

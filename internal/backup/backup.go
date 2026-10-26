@@ -40,13 +40,14 @@ func Run(runner restic.Runner, jobs []config.Job, out io.Writer) Result {
 
 	for _, job := range jobs {
 		fmt.Fprintf(out, "Executing command %s\n", job.Key)
+		backupCmd, forgetCmd := restic.BackupCommand(job), restic.ForgetCommand(job)
 		jobResult := JobResult{
 			Key:       job.Key,
-			BackupCmd: restic.BackupCommand(job),
-			ForgetCmd: restic.ForgetCommand(job),
+			BackupCmd: backupCmd.String(),
+			ForgetCmd: forgetCmd.String(),
 		}
 
-		res := runner.Run(jobResult.BackupCmd)
+		res := runner.Run(backupCmd)
 		jobResult.BackupOutput = output(res)
 		switch res.ExitCode {
 		case 0:
@@ -56,7 +57,7 @@ func Run(runner restic.Runner, jobs []config.Job, out io.Writer) Result {
 			failed = true
 		}
 
-		res = runner.Run(jobResult.ForgetCmd)
+		res = runner.Run(forgetCmd)
 		jobResult.ForgetOutput = output(res)
 		if res.ExitCode != 0 {
 			failed = true

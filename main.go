@@ -16,6 +16,7 @@ You should have received a copy of the GNU General Public License along with Foo
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -71,13 +72,18 @@ func realMain() int {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		fmt.Printf("Error reading config: %v\n", err)
+		printConfigError(err)
 		return 1
+	}
+	for _, warning := range cfg.Warnings {
+		fmt.Println("Warning: " + warning)
 	}
 
 	switch args[0] {
 	case "run":
 		return runBackup(cfg, configPath, *customTemplate, args[1:], logwriter)
+	case "validate":
+		return runValidate(cfg, configPath)
 	case "prune":
 		return runPrune(cfg, args[1:])
 	case "gentimer":
@@ -95,6 +101,35 @@ func printUsage() {
 	fmt.Println("  run [command]   : Run backups (all or specific command)")
 	fmt.Println("  prune <all|repository> : Prune restic repositories")
 	fmt.Println("  gentimer        : Generate systemd service and timer files")
+	fmt.Println("  validate        : Check the configuration and the backed up directories")
+}
+
+// printConfigError prints why the configuration could not be loaded, one problem per line.
+func printConfigError(err error) {
+	var cfgErr *config.Error
+	if errors.As(err, &cfgErr) {
+		for _, warning := range cfgErr.Warnings {
+			fmt.Println("Warning: " + warning)
+		}
+	}
+	if cfgErr == nil || len(cfgErr.Problems) == 1 {
+		fmt.Printf("Error reading config: %v\n", err)
+		return
+	}
+	fmt.Println("Error reading config:")
+	for _, problem := range cfgErr.Problems {
+		fmt.Println("  " + problem)
+	}
+}
+
+// runValidate reports problems that only show up on this machine. Configuration errors
+// and warnings were already printed while loading.
+func runValidate(cfg config.Config, configPath string) int {
+	for _, warning := range cfg.PathWarnings() {
+		fmt.Println("Warning: " + warning)
+	}
+	fmt.Printf("Configuration %s is valid: %d backup jobs.\n", configPath, len(cfg.Jobs))
+	return 0
 }
 
 // runBackup runs all jobs, or the one named in args, and sends the report.
@@ -125,6 +160,9 @@ func runBackup(cfg config.Config, configPath, customTemplate string, args []stri
 			return 1
 		}
 		jobs = []config.Job{job}
+	}
+	for _, warning := range (config.Config{Jobs: jobs}).PathWarnings() {
+		fmt.Println("Warning: " + warning)
 	}
 
 	result := backup.Run(restic.ExecRunner{}, jobs, os.Stdout)

@@ -18,6 +18,8 @@ type Config struct {
 	Telegram Telegram
 	// Jobs are sorted by Key.
 	Jobs []Job
+	// Warnings are problems that do not stop resticara, such as unknown keys.
+	Warnings []string
 }
 
 type General struct {
@@ -66,9 +68,14 @@ type Job struct {
 	Type       JobType
 	Name       string
 	Repository string // INI key "bucket"
-	Directory  string // dir jobs
-	Database   string // mysql jobs
-	Retention  Retention
+	// Directories are the paths backed up by dir jobs, one per "directory" line.
+	Directories []string
+	// Database is what mysql jobs dump: a database name or mysqldump selection
+	// options such as "--all-databases". It is split on whitespace for mysqldump.
+	Database string
+	// MysqldumpArgs are extra mysqldump options for mysql jobs.
+	MysqldumpArgs []string
+	Retention     Retention
 	// PruneDays is the prune interval, from the job or the [general] default.
 	PruneDays int
 }
@@ -79,112 +86,330 @@ type Retention struct {
 	Monthly int
 }
 
-// Load reads and validates the configuration file.
+// Error lists every problem that makes the configuration unusable.
+type Error struct {
+	Problems []string
+	// Warnings found in the same file, which often explain the problems (a
+	// misspelled key shows up as an unknown key and as a missing one).
+	Warnings []string
+}
+
+func (e *Error) Error() string {
+	return strings.Join(e.Problems, "\n")
+}
+
+var knownKeys = map[string][]string{
+	"general":  {"hostID", "retention_prune"},
+	"smtp":     {"enabled", "from", "username", "pass", "to", "server", "port"},
+	"matrix":   {"enabled", "server", "username", "pass", "room_id", "access_token"},
+	"telegram": {"enabled", "bot_token", "chat_id"},
+	"dir":      {"bucket", "directory", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"},
+	"mysql":    {"bucket", "database", "mysqldump_args", "retention_daily", "retention_weekly", "retention_monthly", "retention_prune"},
+}
+
+// repeatableKeys may be set more than once in a section, each line adding a value.
+var repeatableKeys = map[string]bool{"directory": true}
+
+// Load reads and validates the configuration file. Problems that make it unusable
+// are returned together as an *Error.
 func Load(path string) (Config, error) {
-	cfg, err := ini.Load(path)
+	file, err := ini.ShadowLoad(path)
 	if err != nil {
 		return Config{}, err
 	}
 
-	var config Config
-
-	smtp := cfg.Section("smtp")
-	config.SMTP = SMTP{
-		Enabled:  smtp.Key("enabled").MustBool(true),
-		From:     smtp.Key("from").String(),
-		Username: smtp.Key("username").String(),
-		Pass:     smtp.Key("pass").String(),
-		To:       smtp.Key("to").String(),
-		Server:   smtp.Key("server").String(),
-		Port:     smtp.Key("port").String(),
+	p := &parser{}
+	cfg := p.parse(file)
+	if len(p.errors) > 0 {
+		return Config{}, &Error{Problems: p.errors, Warnings: p.warnings}
 	}
-
-	matrix := cfg.Section("matrix")
-	config.Matrix = Matrix{
-		Enabled:     matrix.Key("enabled").MustBool(false),
-		Server:      matrix.Key("server").String(),
-		Username:    matrix.Key("username").String(),
-		Pass:        matrix.Key("pass").String(),
-		RoomID:      matrix.Key("room_id").String(),
-		AccessToken: matrix.Key("access_token").String(),
-	}
-
-	telegram := cfg.Section("telegram")
-	config.Telegram = Telegram{
-		Enabled:  telegram.Key("enabled").MustBool(false),
-		BotToken: telegram.Key("bot_token").String(),
-		ChatID:   telegram.Key("chat_id").MustInt64(0),
-	}
-
-	general := cfg.Section("general")
-	config.General = General{
-		HostID:         general.Key("hostID").String(),
-		RetentionPrune: general.Key("retention_prune").MustInt(30),
-	}
-
-	jobs := make(map[string]map[string]string)
-	for _, section := range cfg.Sections() {
-		if section.Name() == "smtp" || section.Name() == "matrix" || section.Name() == "telegram" {
-			continue
-		}
-
-		splitName := strings.Split(section.Name(), ":")
-		if len(splitName) < 2 {
-			continue
-		}
-
-		jobType := splitName[0]
-		if jobType != string(JobDir) && jobType != string(JobMySQL) {
-			return Config{}, fmt.Errorf("unsupported backup type %q in section [%s], expected dir or mysql", jobType, section.Name())
-		}
-		jobs[jobType+":"+splitName[1]] = section.KeysHash()
-	}
-
-	keys := make([]string, 0, len(jobs))
-	for key := range jobs {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		job, err := parseJob(key, jobs[key], config.General.RetentionPrune)
-		if err != nil {
-			return Config{}, err
-		}
-		config.Jobs = append(config.Jobs, job)
-	}
-
-	return config, nil
+	cfg.Warnings = p.warnings
+	return cfg, nil
 }
 
-func parseJob(key string, settings map[string]string, defaultPruneDays int) (Job, error) {
-	jobType, name, _ := strings.Cut(key, ":")
-	job := Job{
-		Key:        key,
-		Type:       JobType(jobType),
-		Name:       name,
-		Repository: settings["bucket"],
-		Directory:  settings["directory"],
-		Database:   settings["database"],
-		PruneDays:  defaultPruneDays,
+type parser struct {
+	errors   []string
+	warnings []string
+}
+
+func (p *parser) errorf(format string, args ...any) {
+	p.errors = append(p.errors, fmt.Sprintf(format, args...))
+}
+
+func (p *parser) warnf(format string, args ...any) {
+	p.warnings = append(p.warnings, fmt.Sprintf(format, args...))
+}
+
+func (p *parser) parse(file *ini.File) Config {
+	var cfg Config
+
+	general := file.Section("general")
+	p.checkKeys(general, "general", true)
+	cfg.General = General{
+		HostID:         value(general, "hostID"),
+		RetentionPrune: p.pruneDays(general, "[general]", 30),
 	}
 
-	var err error
-	if job.Retention.Daily, err = strconv.Atoi(settings["retention_daily"]); err != nil {
-		return Job{}, fmt.Errorf("'retention_daily' for %s must be an integer", key)
+	smtp := file.Section("smtp")
+	p.checkKeys(smtp, "smtp", true)
+	cfg.SMTP = SMTP{
+		Enabled:  p.boolean(smtp, true),
+		From:     value(smtp, "from"),
+		Username: value(smtp, "username"),
+		Pass:     value(smtp, "pass"),
+		To:       value(smtp, "to"),
+		Server:   value(smtp, "server"),
+		Port:     value(smtp, "port"),
 	}
-	if job.Retention.Weekly, err = strconv.Atoi(settings["retention_weekly"]); err != nil {
-		return Job{}, fmt.Errorf("'retention_weekly' for %s must be an integer", key)
+
+	matrix := file.Section("matrix")
+	p.checkKeys(matrix, "matrix", true)
+	cfg.Matrix = Matrix{
+		Enabled:     p.boolean(matrix, false),
+		Server:      value(matrix, "server"),
+		Username:    value(matrix, "username"),
+		Pass:        value(matrix, "pass"),
+		RoomID:      value(matrix, "room_id"),
+		AccessToken: value(matrix, "access_token"),
 	}
-	if job.Retention.Monthly, err = strconv.Atoi(settings["retention_monthly"]); err != nil {
-		return Job{}, fmt.Errorf("'retention_monthly' for %s must be an integer", key)
+
+	telegram := file.Section("telegram")
+	p.checkKeys(telegram, "telegram", true)
+	cfg.Telegram = Telegram{
+		Enabled:  p.boolean(telegram, false),
+		BotToken: value(telegram, "bot_token"),
 	}
-	if val, ok := settings["retention_prune"]; ok {
-		if job.PruneDays, err = strconv.Atoi(val); err != nil {
-			return Job{}, fmt.Errorf("'retention_prune' for %s must be an integer", key)
+	if raw := value(telegram, "chat_id"); raw != "" {
+		chatID, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			p.errorf("'chat_id' in [telegram] must be an integer")
+		}
+		cfg.Telegram.ChatID = chatID
+	}
+
+	p.checkChannels(file, cfg)
+
+	for _, key := range file.Section(ini.DefaultSection).KeyStrings() {
+		p.warnf("key '%s' is outside of any section and is ignored", key)
+	}
+
+	for _, section := range file.Sections() {
+		name := section.Name()
+		switch name {
+		case ini.DefaultSection, "general", "smtp", "matrix", "telegram":
+			continue
+		}
+		jobType, jobName, isJob := strings.Cut(name, ":")
+		if !isJob {
+			p.warnf("section [%s] is not used", name)
+			continue
+		}
+		if jobType != string(JobDir) && jobType != string(JobMySQL) {
+			p.errorf("unsupported backup type %q in section [%s], expected dir or mysql", jobType, name)
+			continue
+		}
+		if jobName == "" || strings.Contains(jobName, ":") {
+			p.errorf("section [%s] must be named type:name, for example [%s:website]", name, jobType)
+			continue
+		}
+		cfg.Jobs = append(cfg.Jobs, p.job(section, JobType(jobType), jobName, cfg.General.RetentionPrune))
+	}
+	sort.Slice(cfg.Jobs, func(i, j int) bool { return cfg.Jobs[i].Key < cfg.Jobs[j].Key })
+
+	return cfg
+}
+
+func (p *parser) job(section *ini.Section, jobType JobType, name string, defaultPruneDays int) Job {
+	key := section.Name()
+	p.checkKeys(section, string(jobType), false)
+
+	job := Job{
+		Key:        key,
+		Type:       jobType,
+		Name:       name,
+		Repository: value(section, "bucket"),
+		PruneDays:  p.pruneDays(section, key, defaultPruneDays),
+	}
+	if job.Repository == "" {
+		p.errorf("'bucket' is required for %s", key)
+	}
+
+	switch jobType {
+	case JobDir:
+		for _, dir := range values(section, "directory") {
+			if dir != "" {
+				job.Directories = append(job.Directories, dir)
+			}
+		}
+		if len(job.Directories) == 0 {
+			p.errorf("'directory' is required for %s", key)
+		}
+	case JobMySQL:
+		job.Database = value(section, "database")
+		if job.Database == "" {
+			p.errorf("'database' is required for %s", key)
+		}
+		if args := strings.Fields(value(section, "mysqldump_args")); len(args) > 0 {
+			job.MysqldumpArgs = args
 		}
 	}
-	return job, nil
+
+	job.Retention.Daily = p.retention(section, "retention_daily")
+	job.Retention.Weekly = p.retention(section, "retention_weekly")
+	job.Retention.Monthly = p.retention(section, "retention_monthly")
+	return job
+}
+
+// checkKeys reports unknown keys, and keys set more than once that are not repeatable.
+// Duplicates are errors in job sections and warnings elsewhere, where the last value wins.
+func (p *parser) checkKeys(section *ini.Section, kind string, lastWins bool) {
+	known := make(map[string]bool)
+	for _, key := range knownKeys[kind] {
+		known[key] = true
+	}
+	for _, key := range section.Keys() {
+		name := key.Name()
+		if !known[name] {
+			p.warnf("unknown key '%s' in [%s] is ignored", name, section.Name())
+			continue
+		}
+		if len(key.ValueWithShadows()) > 1 && !repeatableKeys[name] {
+			if lastWins {
+				p.warnf("'%s' is set more than once in [%s]; the last value is used", name, section.Name())
+			} else {
+				p.errorf("'%s' is set more than once in [%s]", name, section.Name())
+			}
+		}
+	}
+}
+
+func (p *parser) retention(section *ini.Section, key string) int {
+	n, err := strconv.Atoi(value(section, key))
+	if err != nil {
+		p.errorf("'%s' for %s must be an integer", key, section.Name())
+	}
+	return n
+}
+
+func (p *parser) pruneDays(section *ini.Section, where string, defaultDays int) int {
+	raw := value(section, "retention_prune")
+	if raw == "" {
+		return defaultDays
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil {
+		p.errorf("'retention_prune' for %s must be an integer", where)
+		return defaultDays
+	}
+	if days < 1 {
+		p.errorf("'retention_prune' for %s must be at least 1", where)
+	}
+	return days
+}
+
+func (p *parser) boolean(section *ini.Section, defaultValue bool) bool {
+	raw := value(section, "enabled")
+	if raw == "" {
+		return defaultValue
+	}
+	switch strings.ToLower(raw) {
+	case "true", "t", "yes", "y", "on", "1":
+		return true
+	case "false", "f", "no", "n", "off", "0":
+		return false
+	}
+	p.errorf("'enabled' in [%s] must be true or false, got %q", section.Name(), raw)
+	return defaultValue
+}
+
+// checkChannels warns about enabled notification channels that cannot work. These
+// are warnings, so a broken notification setup never stops the backups.
+func (p *parser) checkChannels(file *ini.File, cfg Config) {
+	missing := func(pairs ...string) []string {
+		var names []string
+		for i := 0; i < len(pairs); i += 2 {
+			if pairs[i+1] == "" {
+				names = append(names, "'"+pairs[i]+"'")
+			}
+		}
+		return names
+	}
+
+	if cfg.SMTP.Enabled {
+		m := missing("server", cfg.SMTP.Server, "port", cfg.SMTP.Port, "from", cfg.SMTP.From, "to", cfg.SMTP.To)
+		switch {
+		case value(file.Section("smtp"), "enabled") == "" && cfg.SMTP.Server == "":
+			p.warnf("email is enabled by default but [smtp] has no server; set 'enabled = false' in [smtp] or configure it")
+		case len(m) > 0:
+			p.warnf("[smtp] is enabled but %s not set, so email cannot be sent", strings.Join(m, ", "))
+		}
+	}
+	if cfg.Matrix.Enabled {
+		m := missing("server", cfg.Matrix.Server, "room_id", cfg.Matrix.RoomID)
+		if cfg.Matrix.AccessToken == "" && (cfg.Matrix.Username == "" || cfg.Matrix.Pass == "") {
+			m = append(m, "'access_token' (or 'username' and 'pass')")
+		}
+		if len(m) > 0 {
+			p.warnf("[matrix] is enabled but %s not set, so Matrix messages cannot be sent", strings.Join(m, ", "))
+		}
+	}
+	if cfg.Telegram.Enabled {
+		m := missing("bot_token", cfg.Telegram.BotToken)
+		if cfg.Telegram.ChatID == 0 {
+			m = append(m, "'chat_id'")
+		}
+		if len(m) > 0 {
+			p.warnf("[telegram] is enabled but %s not set, so Telegram messages cannot be sent", strings.Join(m, ", "))
+		}
+	}
+}
+
+// value returns the last value of a key, like a plain INI parser would, or "".
+func value(section *ini.Section, key string) string {
+	vals := values(section, key)
+	if len(vals) == 0 {
+		return ""
+	}
+	return vals[len(vals)-1]
+}
+
+// values returns every value of a key that may be repeated.
+func values(section *ini.Section, key string) []string {
+	if !section.HasKey(key) {
+		return nil
+	}
+	var vals []string
+	for _, v := range section.Key(key).ValueWithShadows() {
+		vals = append(vals, strings.TrimSpace(v))
+	}
+	return vals
+}
+
+// PathWarnings reports directories of dir jobs that do not exist on this machine.
+func (c Config) PathWarnings() []string {
+	var warnings []string
+	for _, job := range c.Jobs {
+		for _, dir := range job.Directories {
+			if _, err := os.Stat(dir); err == nil {
+				continue
+			}
+			warning := fmt.Sprintf("directory %q of %s does not exist", dir, job.Key)
+			if fields := strings.Fields(dir); len(fields) > 1 && allExist(fields) {
+				warning += "; to back up several directories, put each on its own 'directory =' line"
+			}
+			warnings = append(warnings, warning)
+		}
+	}
+	return warnings
+}
+
+func allExist(paths []string) bool {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // Job returns the job with the given key.

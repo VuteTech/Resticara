@@ -32,7 +32,9 @@ enabled = false
 
 [dir:website]
 bucket = b2:bucket:wpsites/
+; one line per directory
 directory = /var/www
+directory = /etc/nginx
 retention_daily = 4
 retention_weekly = 7
 retention_monthly = 3
@@ -40,7 +42,10 @@ retention_prune = 14
 
 [mysql:maindb]
 bucket = b2:bucket:mariadb/
+; a database name, or mysqldump options such as --all-databases or --databases db1 db2
 database = --all-databases
+; extra mysqldump options, added after --single-transaction
+;mysqldump_args = --routines --events
 retention_daily = 4
 retention_weekly = 7
 retention_monthly = 3
