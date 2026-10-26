@@ -68,6 +68,13 @@ Matrix can log in with `username`/`pass` (the session is logged out after each m
 ## Packages
 The `.deb` and `.rpm` packages install `/etc/resticara/config.ini` readable only by root and treat it and the templates as configuration files, so upgrades keep local changes. Resticara warns when `config.ini` or `restic.env` can be read by other users.
 
+## Development
+```
+go test ./...                                     # unit tests
+go test -tags integration ./test/integration/...  # integration tests against real restic repositories
+```
+The integration tests build the binary, create local restic repositories in temporary directories and replace `mysqldump` and `systemctl` with stubs. They need restic 0.17 or newer in `PATH` and are skipped without it.
+
 ## Contributing
 Contributions are welcome! Feel free to open an issue or create a pull request.
 

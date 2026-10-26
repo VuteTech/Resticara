@@ -39,8 +39,40 @@ jobs:
         name: resticara-artifacts
         path: resticara
 
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      # the distribution package may be older than 0.17, which resticara requires
+      RESTIC_VERSION: 0.19.1
+      RESTICARA_REQUIRE_RESTIC: 1
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup Go
+      uses: actions/setup-go@v7
+      with:
+        go-version: stable
+
+    - name: Install restic
+      working-directory: ${{ runner.temp }}
+      run: |
+        base="https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}"
+        asset="restic_${RESTIC_VERSION}_linux_amd64.bz2"
+        curl -fsSLO "$base/$asset"
+        curl -fsSLO "$base/SHA256SUMS"
+        grep " ${asset}\$" SHA256SUMS | sha256sum --check -
+        bunzip2 "$asset"
+        sudo install -m 0755 "${asset%.bz2}" /usr/local/bin/restic
+        restic version
+
+    - name: Vet integration tests
+      run: go vet -tags integration ./...
+
+    - name: Run integration tests
+      run: go test -tags integration -v ./test/integration/...
+
   package:
-    needs: build
+    needs: [build, integration]
     runs-on: ubuntu-latest
     env:
       REF_NAME: ${{ github.ref_name }}
