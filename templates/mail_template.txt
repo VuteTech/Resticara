@@ -1,6 +1,9 @@
 ----------Backup Report For {{.HostID}}----------
 Date: {{.Date}}
+{{.Subject}}
 
+{{range .Commands}}{{printf "%-7s" .StatusLabel}} {{.CommandKey}} ({{.Duration}})
+{{end}}
 {{range .Commands}}
 Executing command: {{.CommandKey}}
 
@@ -14,4 +17,3 @@ $ {{.ForgetCmd}}
 ----------------------------------------
 {{.StatusMessage}}
 ----------------------------------------
-

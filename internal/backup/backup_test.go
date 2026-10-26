@@ -71,11 +71,16 @@ func TestRunResults(t *testing.T) {
 	}
 	want := []JobResult{{
 		Key:          "dir:a",
+		Status:       Warning,
 		BackupCmd:    "restic -r /repo-a --retry-lock 30m backup /a",
 		BackupOutput: "snapshot saved\n\nStderr: warning\n",
 		ForgetCmd:    "restic -r /repo-a --retry-lock 30m forget --keep-daily 0 --keep-weekly 0 --keep-monthly 0",
 		ForgetOutput: "ok\nStderr: ",
 	}}
+	if result.Jobs[0].Duration <= 0 {
+		t.Errorf("Duration = %v", result.Jobs[0].Duration)
+	}
+	result.Jobs[0].Duration = 0
 	if !reflect.DeepEqual(result.Jobs, want) {
 		t.Errorf("jobs =\n%+v\nwant\n%+v", result.Jobs, want)
 	}
@@ -130,5 +135,24 @@ func TestOtherHostsNoteSkipped(t *testing.T) {
 		if strings.Contains(result.Jobs[0].ForgetOutput, "Note:") || len(runner.ran) != tt.ran {
 			t.Errorf("%s: ForgetOutput %q, ran %v", name, result.Jobs[0].ForgetOutput, runner.ran)
 		}
+	}
+}
+
+func TestRunJobStatus(t *testing.T) {
+	runner := &fakeRunner{results: map[string]restic.Result{
+		"backup /a":                       {ExitCode: restic.ExitIncomplete},
+		"/repo-b --retry-lock 30m forget": {ExitCode: 1},
+	}}
+	jobs := append(jobs, config.Job{Key: "dir:c", Type: config.JobDir, Repository: "/repo-c", Directories: []string{"/c"}})
+	var out strings.Builder
+	result := Run(runner, jobs, "", &out)
+
+	var got []string
+	for _, job := range result.Jobs {
+		got = append(got, job.Key+"="+job.Status.String())
+	}
+	// a forget failure fails the job, and one job's status never leaks into another's
+	if strings.Join(got, " ") != "dir:a=warning dir:b=failure dir:c=success" || result.Status != Failure {
+		t.Errorf("statuses %v, overall %v", got, result.Status)
 	}
 }

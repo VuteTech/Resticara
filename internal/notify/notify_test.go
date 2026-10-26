@@ -53,7 +53,8 @@ func TestSendAllChannels(t *testing.T) {
 	mail, mx, tg := &fakeEmail{}, &fakeMatrix{}, &fakeTelegram{}
 	var out strings.Builder
 
-	ok := Notifiers{Email: mail, Matrix: mx, Telegram: tg}.Send(cfg, report.Report{StatusMessage: report.StatusSuccess}, messages, &out)
+	rep := report.Report{StatusMessage: report.StatusSuccess, Subject: "[server-1] Backup successful"}
+	ok := Notifiers{Email: mail, Matrix: mx, Telegram: tg}.Send(cfg, rep, messages, &out)
 	if !ok {
 		t.Errorf("Send returned false")
 	}
@@ -62,7 +63,7 @@ func TestSendAllChannels(t *testing.T) {
 	}
 
 	if len(mail.sent) != 1 || mail.sent[0].Body != "mail body" || mail.sent[0].SmtpServer != "mail.example.com" || mail.sent[0].Password != "pw" ||
-		!strings.HasPrefix(mail.sent[0].Subject, report.StatusSuccess+"---") {
+		mail.sent[0].Subject != "[server-1] Backup successful" {
 		t.Errorf("email = %+v", mail.sent)
 	}
 	if len(mx.sent) != 1 || mx.sent[0].Message != "<b>matrix</b>" || mx.sent[0].AccessToken != "tok" || mx.sent[0].RoomID != "!r:x" {

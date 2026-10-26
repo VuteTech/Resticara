@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"resticara/internal/config"
 	"resticara/internal/restic"
@@ -21,9 +22,11 @@ const (
 	Failure
 )
 
-// JobResult holds the commands that ran for a job and their output.
+// JobResult holds the commands that ran for a job, their output and the outcome.
 type JobResult struct {
 	Key          string
+	Status       Status
+	Duration     time.Duration
 	BackupCmd    string
 	BackupOutput string
 	ForgetCmd    string
@@ -42,6 +45,8 @@ func Run(runner restic.Runner, jobs []config.Job, host string, out io.Writer) Re
 	failed, warned := false, false
 
 	for _, job := range jobs {
+		start := time.Now()
+		jobFailed, jobWarned := false, false
 		fmt.Fprintf(out, "Executing command %s\n", job.Key)
 		backupCmd, forgetCmd := restic.BackupCommand(job, host), restic.ForgetCommand(job, host)
 		jobResult := JobResult{
@@ -55,33 +60,53 @@ func Run(runner restic.Runner, jobs []config.Job, host string, out io.Writer) Re
 		switch res.ExitCode {
 		case 0:
 		case restic.ExitIncomplete:
-			warned = true
+			jobWarned = true
 		default:
-			failed = true
+			jobFailed = true
 		}
 
 		res = runner.Run(forgetCmd)
 		jobResult.ForgetOutput = output(res)
 		if res.ExitCode != 0 {
-			failed = true
+			jobFailed = true
 		} else if host != "" {
 			if note := otherHostsNote(runner, job, host); note != "" {
 				jobResult.ForgetOutput += "\n" + note
 			}
 		}
 
+		jobResult.Status = status(jobFailed, jobWarned)
+		jobResult.Duration = time.Since(start)
+		failed = failed || jobFailed
+		warned = warned || jobWarned
 		result.Jobs = append(result.Jobs, jobResult)
 	}
 
+	result.Status = status(failed, warned)
+	return result
+}
+
+func status(failed, warned bool) Status {
 	switch {
 	case failed:
-		result.Status = Failure
+		return Failure
 	case warned:
-		result.Status = Warning
+		return Warning
 	default:
-		result.Status = Success
+		return Success
 	}
-	return result
+}
+
+// String returns the status as used in templates: "success", "warning" or "failure".
+func (s Status) String() string {
+	switch s {
+	case Success:
+		return "success"
+	case Warning:
+		return "warning"
+	default:
+		return "failure"
+	}
 }
 
 func output(res restic.Result) string {
